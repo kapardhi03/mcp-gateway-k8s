@@ -37,6 +37,11 @@ Rules for Claude Code in this repo. Read `docs/decision-log.md` before changing 
 - Never hardcode `ingressClassName`, `storageClassName`, `traefik` or `local-path` in `templates/`. They come from values only. This keeps the charts portable to a reviewer's kind or EKS cluster. See D-002.
 - Run `scripts/check-charts.sh` before calling any chart done.
 
+## Cloud cost
+
+- Never upgrade billing, never click or call anything that activates a paid account.
+- Never create a billable resource without showing Kapardhi the cost and getting his OK.
+
 ## Scope
 
 - Core Definition of Done first. No stretch goals until `docs/requirements-trace.md` shows the core passing end to end.

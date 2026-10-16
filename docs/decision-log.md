@@ -431,6 +431,34 @@ The four that interest me most: 6 Security hardening, 2 Tool permissions, 1 VPS 
 
 **Billing evidence (2026-10-16).** The Cloud Billing API does not expose trial status: the full v1 response for billing account `01F0BC-06CF08-82155F` contains only `name`, `open`, `displayName`, `masterBillingAccount`, `parent` and `currencyCode`, and `open: true` is equally true of a paid account. Confirmed in the console instead, read by Kapardhi: "You're in free trial. 0 out of ₹28,797 credits used. Expires 15 January 2027." Upgrade to a paid account was not clicked. A budget alert was created at ₹4,755, the USD 50 equivalent at 95.10 INR/USD on 2026-10-16; the API rejects a USD budget on an INR billing account.
 
+**What was built (2026-10-16).**
+
+| Item | Value |
+|---|---|
+| Project | `mcp-kb8` |
+| VM | `gw-prod`, `asia-south1-a`, e2-standard-2 (2 vCPU, 8 GB), 50 GB pd-balanced |
+| OS | Ubuntu 24.04 LTS amd64, matching the version chosen for the Oracle attempt |
+| Static IP | `34.93.101.10` |
+| Prod host | `store.34.93.101.10.sslip.io` |
+| k3s | `v1.35.5+k3s1`, the same version as the local k3d cluster |
+| SSH | IAP TCP forwarding only, `35.235.240.0/20` on tag `k3s-prod`. `default-allow-ssh` and `default-allow-rdp` deleted. No public SSH port |
+| API server | 6443 never opened; `kubectl` reaches it through an SSH tunnel on `127.0.0.1:16443` |
+
+**Why `mcp-kb8` and not a dedicated `gw-prod-*` project.** A dedicated project was the plan, but
+`gcloud projects create` failed with `you have exceeded your allotted project quota`: the account already
+holds 12 active projects and none were pending deletion. Deleting one to make room was rejected, because
+`gen-lang-client-0028724881` may be serving a live ARTHRYX product and the risk is not worth a cosmetic
+project name. `mcp-kb8` was created the same day for this work, had billing linked and the compute and IAP
+APIs enabled, and held no resources. The budget has no project filter, so it covers every project on the
+billing account regardless.
+
+**Cost.** About ₹7,056 per month, from the Cloud Billing Catalog API for `asia-south1` on-demand:
+vCPU ₹2.514838/h x 2, RAM ₹0.336990/GiB-h x 8, pd-balanced ₹11.518650/GiB-month x 50, static IP ₹1.151865/h.
+Paid from the ₹28,797 trial credit, which covers about four months. The trial ends 15 January 2027.
+No card charge is possible without a manual upgrade, and `CLAUDE.md` now forbids that upgrade outright.
+The budget alert was raised from ₹4,755 to ₹7,500 so an alert means unexpected spend rather than the VM
+simply running.
+
 **Status:** decided
 
 ---
