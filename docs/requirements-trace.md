@@ -21,6 +21,27 @@ Status values: `todo`, `in progress`, `pass`, `fail`.
 | DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | | | | todo |
 | DOD-11 | Every call above in audit log, attributed to the right user | | | | todo |
 
+## D-001 spike: which MCP protocol version do real clients send?
+
+Pre-registered 2026-10-16, before the spike ran. Spike lives in `spikes/d001-mcp-version/`.
+
+**Expected.** Each client completes `echo`. Recorded per client: protocol version, initialize yes/no, session ID yes/no.
+
+| Client | Client version | Protocol version | initialize | Session ID | echo worked |
+|---|---|---|---|---|---|
+| Claude Code | 2.1.278 | 2026-07-28 | no | no | not measured, nested auth failed |
+| MCP Inspector (CLI) | 2.11.0 | 2025-11-25 | yes | yes | yes |
+| Cursor | not installed | n/a | n/a | n/a | skipped |
+| MCP Python SDK client | mcp 2.3.0 | 2026-07-28 | no | no | yes |
+
+**Actual, 2026-10-16.** Three of four rows measured. Cursor is not installed on this machine. Claude Code connected, ran `server/discover`, `tools/list`, `prompts/list`, `resources/list` and `subscriptions/listen`, which is what the protocol columns record; its `tools/call` was not completed because a nested `claude -p` failed with an expired OAuth session, a harness limit rather than a protocol problem.
+
+**Key result.** One SDK 2.3.0 server served both protocol versions at the same time with no special handling: stateless 2026-07-28 for Claude Code and the Python SDK, and an old-style session on 2025-11-25 for the Inspector. Evidence: `spikes/d001-mcp-version/requests.jsonl` and `spikes/d001-mcp-version/README.md`.
+
+Facts from the SDK before running, `mcp==2.3.0`: `LATEST_PROTOCOL_VERSION = 2026-07-28`, `MODERN_PROTOCOL_VERSIONS = ('2026-07-28',)`, `DEFAULT_NEGOTIATED_VERSION = 2025-03-26`. Source: https://pypi.org/project/mcp/ and the installed package.
+
+This spike does not decide D-001. It supplies the measurements.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
