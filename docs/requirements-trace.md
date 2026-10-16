@@ -66,6 +66,33 @@ Routing confirmed after SC-8: `/shop/` 200, `/cart/` 200, `/demo-widget/` 301 to
 
 DOD-01 (browser checkout) is Kapardhi's to run. DOD-02 (order visible) is verified with WP-CLI afterwards.
 
+## VPS bring-up (K-02 prod half)
+
+Pre-registered 2026-10-16, before k3s was installed. See D-016.
+
+Host: GCP `gw-prod`, project `mcp-kb8`, zone `asia-south1-a`, e2-standard-2, 50 GB pd-balanced,
+Ubuntu 24.04 LTS amd64, static IP `34.93.101.10`. SSH only through IAP TCP forwarding
+(`35.235.240.0/20`, tag `k3s-prod`); no public SSH port and `default-allow-ssh` deleted.
+
+| # | Check | Expected | Actual | Result |
+|---|---|---|---|---|
+| VPS-1 | `kubectl get nodes` | 1 node, Ready | `gw-prod.asia-south1-a.c.mcp-kb8.internal  Ready  control-plane  v1.35.5+k3s1` | pass |
+| VPS-2 | k3s version | `v1.35.5+k3s1`, matching local k3d | `k3s version v1.35.5+k3s1 (6a4781ad)`; local k3d node also `v1.35.5+k3s1` | pass |
+| VPS-3 | `kubectl get pods -n kube-system` | traefik Running | `traefik-9bcdbbd9-6bgqf 1/1 Running`, `svclb-traefik 2/2 Running`; ingressclass `traefik` present | pass |
+| VPS-4 | `kubectl get storageclass` | `local-path` marked (default) | `local-path (default)  rancher.io/local-path` | pass |
+| VPS-5 | kubeconfig at `~/.kube/gw-prod.yaml` | outside the repo, server over an SSH tunnel, not an open 6443 | file is `0600` outside the repo, `server: https://127.0.0.1:16443`; `kubectl get nodes` works through `gcloud compute ssh --tunnel-through-iap -- -N -L 16443:localhost:6443`; `curl https://34.93.101.10:6443` from the internet returns nothing | pass |
+
+**Host verified.** `x86_64`, 2 CPUs, 7.7 GiB RAM, Ubuntu 24.04.5 LTS, 48 GB root. Local and prod now run the same k3s, `v1.35.5+k3s1`, which is what K-02 needs.
+
+**To reopen the tunnel after a reboot:**
+
+```
+gcloud compute ssh gw-prod --project=mcp-kb8 --zone=asia-south1-a --tunnel-through-iap -- -N -L 16443:localhost:6443
+KUBECONFIG=~/.kube/gw-prod.yaml kubectl get nodes
+```
+
+Ports 80 and 443 are not open yet. 6443 is never opened.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
