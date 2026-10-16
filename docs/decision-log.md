@@ -429,6 +429,8 @@ The four that interest me most: 6 Security hardening, 2 Tool permissions, 1 VPS 
 
 **Note.** Nothing is deleted on Oracle. The VCN, gateway, route table, security list and subnet cost nothing under Always Free, and `~/oci-retry/launch-a1.sh` can be restarted against them at any time.
 
+**Billing evidence (2026-10-16).** The Cloud Billing API does not expose trial status: the full v1 response for billing account `01F0BC-06CF08-82155F` contains only `name`, `open`, `displayName`, `masterBillingAccount`, `parent` and `currencyCode`, and `open: true` is equally true of a paid account. Confirmed in the console instead, read by Kapardhi: "You're in free trial. 0 out of ₹28,797 credits used. Expires 15 January 2027." Upgrade to a paid account was not clicked. A budget alert was created at ₹4,755, the USD 50 equivalent at 95.10 INR/USD on 2026-10-16; the API rejects a USD budget on an INR billing account.
+
 **Status:** decided
 
 ---

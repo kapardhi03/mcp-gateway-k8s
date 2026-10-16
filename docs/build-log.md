@@ -135,4 +135,6 @@ k3d pulled `docker.io/rancher/k3s:v1.35.5-k3s1`. Pin that tag on the VPS so both
 
 **Note for D-006.** WooCommerce here uses legacy post storage, not HPOS. A direct database query against `wp_wc_orders` fails. `wc_get_orders()` is storage-agnostic. This is further evidence for the REST API option in D-006 over direct SQL.
 
+**AI error caught (2026-10-16, GCP planning).** C-code proposed the first VM create command with `--no-address`, arguing it removed the public SSH attack surface entirely. It flagged only the egress consequence, that the VM could not reach the internet to install k3s without Cloud NAT. It missed the larger problem: the VPS must accept **public inbound HTTP** for Ingress, which is requirement K-06 and the whole point of the prod deployment. A VM with no external IP would have made the prod store unreachable. Caught by Kapardhi before anything was created. The corrected plan reserves a static external IP so the prod hostname can be `store.<IP>.sslip.io` and stays stable, while SSH still goes only through IAP TCP forwarding from `35.235.240.0/20` with no public SSH port.
+
 **Next.** GCP VM for the VPS half of K-02. Then the Woo MCP server, which needs D-006 and D-001.
