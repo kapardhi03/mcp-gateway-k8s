@@ -33,8 +33,11 @@ Pre-registered 2026-10-16, before the spike ran. Spike lives in `spikes/d001-mcp
 | MCP Inspector (CLI) | 2.11.0 | 2025-11-25 | yes | yes | yes |
 | Cursor | not installed | n/a | n/a | n/a | skipped |
 | MCP Python SDK client | mcp 2.3.0 | 2026-07-28 | no | no | yes |
+| MCP Python SDK client vs old-only upstream | mcp 2.3.0 client, mcp 1.28.1 server | 2025-11-25 (fell back) | yes | yes | yes |
 
 **Actual, 2026-10-16.** Three of four rows measured. Cursor is not installed on this machine. Claude Code connected, ran `server/discover`, `tools/list`, `prompts/list`, `resources/list` and `subscriptions/listen`, which is what the protocol columns record; its `tools/call` was not completed because a nested `claude -p` failed with an expired OAuth session, a harness limit rather than a protocol problem.
+
+**Key result, client side (2026-10-16 follow-up).** The 2.3.0 client falls back to 2025-11-25 against an upstream running mcp 1.28.1: it probes `server/discover` on 2026-07-28, downgrades to the full `initialize` handshake, manages the session and sends `DELETE` to close it. Evidence: `spikes/d001-mcp-version/requests_old.jsonl`.
 
 **Key result.** One SDK 2.3.0 server served both protocol versions at the same time with no special handling: stateless 2026-07-28 for Claude Code and the Python SDK, and an old-style session on 2025-11-25 for the Inspector. Evidence: `spikes/d001-mcp-version/requests.jsonl` and `spikes/d001-mcp-version/README.md`.
 

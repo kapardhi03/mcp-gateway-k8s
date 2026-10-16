@@ -39,6 +39,7 @@ headers                    = mcp-protocol-version, mcp-session-id
 | MCP Inspector (CLI) | 2.11.0 | 2025-11-25 | yes | yes | yes |
 | Cursor | not installed | — | — | — | skipped |
 | MCP Python SDK client | mcp 2.3.0 | 2026-07-28 | no | no | yes |
+| MCP Python SDK client vs old-only upstream | mcp 2.3.0 client, mcp 1.28.1 server | 2025-11-25 (fell back) | yes | yes | yes |
 
 ## What each client actually sent
 
@@ -53,6 +54,24 @@ headers                    = mcp-protocol-version, mcp-session-id
 5. `POST tools/call`
 
 Every request after step 1 carried `mcp-session-id: bc705e1af...`.
+
+## Follow-up: does the 2.3.0 client fall back?
+
+The gateway is an MCP client to every upstream, so the first spike left a gap: what happens when an upstream cannot speak 2026-07-28?
+
+`server_old.py` runs on `mcp==1.28.1` in a separate venv (`.venv-old`), whose `LATEST_PROTOCOL_VERSION` is `2025-11-25`. The modern 2.3.0 client was pointed at it.
+
+**It falls back, and `echo` works.** The client reported `negotiated_protocol_version: 2025-11-25`. The sequence on the wire:
+
+1. `POST server/discover` with `mcp-protocol-version: 2026-07-28` — tries modern first
+2. `POST initialize` with `protocolVersion: 2025-11-25` in params — downgrades
+3. `POST notifications/initialized`, now carrying a session ID
+4. `GET /mcp` to open the SSE stream
+5. `POST tools/list`
+6. `POST tools/call`
+7. `DELETE /mcp` — tears the session down
+
+So the SDK handles version heterogeneity in both directions without custom code: one server answers old and new clients, and one client adapts to old and new upstreams, including session lifecycle.
 
 ## The finding that matters for D-001
 
