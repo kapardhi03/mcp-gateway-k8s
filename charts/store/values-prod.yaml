@@ -1,0 +1,29 @@
+# Production k3s VPS overrides. See D-002, D-003.
+#
+# The host is a placeholder until the VPS exists and a domain is pointed at
+# it. It must not be a localhost or .local name: scripts/check-charts.sh
+# fails the render if a local-only value leaks into a prod render.
+ingress:
+  className: traefik
+  host: store.example.com
+
+storage:
+  className: local-path
+
+database:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi
+
+wordpress:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

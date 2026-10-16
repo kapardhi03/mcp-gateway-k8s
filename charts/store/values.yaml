@@ -1,0 +1,144 @@
+# Defaults for the store chart.
+#
+# No secret value appears here or in any other values file. The chart takes
+# the NAME of a Secret that already exists in the namespace. See D-019 and
+# scripts/dev-secrets.sh.
+#
+# No k3s-specific value appears in templates/ either: ingressClassName and
+# storageClassName are set here and overridden per environment, so the chart
+# installs on a reviewer's kind or EKS cluster. See D-002 and
+# scripts/check-charts.sh.
+
+nameOverride: ""
+fullnameOverride: ""
+
+ingress:
+  enabled: true
+  # Empty on purpose. values-local.yaml and values-prod.yaml must set both.
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+
+storage:
+  # Empty means "use the cluster default StorageClass". Set explicitly per
+  # environment so the chart never depends on which provisioner a cluster
+  # happens to default to.
+  className: ""
+  database:
+    size: 2Gi
+  wordpress:
+    size: 2Gi
+
+database:
+  image:
+    repository: mariadb
+    # Pinned. Confirmed linux/amd64 and linux/arm64 on 2026-10-16.
+    tag: "11.8.9"
+    pullPolicy: IfNotPresent
+  name: wordpress
+  user: wordpress
+  # Name of an existing Secret holding keys: root-password, password.
+  existingSecret: store-db
+  secretKeys:
+    rootPassword: root-password
+    password: password
+  service:
+    port: 3306
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  probes:
+    # Readiness uses healthcheck.sh --connect: the pod leaves the Service
+    # until MariaDB actually accepts connections, so WordPress never races it.
+    readiness:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 6
+    # Liveness is deliberately lenient. The database IS the dependency here,
+    # so a liveness probe on it is legitimate, but a slow query or a cold
+    # InnoDB recovery must not trigger a restart loop. Hence the long initial
+    # delay and high failure threshold.
+    liveness:
+      initialDelaySeconds: 60
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 6
+    # Startup probe absorbs first-boot initialisation so liveness does not
+    # count failures while the data directory is being created.
+    startup:
+      periodSeconds: 10
+      failureThreshold: 30
+
+wordpress:
+  image:
+    repository: wordpress
+    # Pinned. Confirmed linux/amd64 and linux/arm64 on 2026-10-16.
+    tag: "7.1.3-php8.3-apache"
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 640Mi
+  probes:
+    # Readiness hits / over HTTP, which DOES touch the database. That is
+    # correct: if the database is down this pod cannot serve, so take it out
+    # of the Service.
+    readiness:
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 6
+    # Liveness is a TCP check on the Apache port and NOTHING else. It must not
+    # touch the database. If it did, a database outage would restart every
+    # WordPress pod, the restarts would not fix anything, and the cascade
+    # would turn one failure into two. Liveness answers "is this process
+    # wedged?", readiness answers "can it serve right now?".
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 6
+  admin:
+    user: admin
+    # Name of an existing Secret holding keys: password, email.
+    existingSecret: store-admin
+    secretKeys:
+      password: password
+      email: email
+  siteTitle: "Demo Store"
+
+bootstrap:
+  enabled: true
+  image:
+    repository: wordpress
+    # Pinned. Confirmed linux/amd64 and linux/arm64 on 2026-10-16.
+    tag: "cli-2.12.0-php8.3"
+    pullPolicy: IfNotPresent
+  # Pinned. wordpress.org reports 11.2.1 tested up to WP 7.1.3.
+  woocommerceVersion: "11.2.1"
+  # WordPress core version the Job downloads into its own scratch directory so
+  # wp-cli has a wp-config.php to work from. Must match wordpress.image.tag.
+  wordpressVersion: "7.1.3"
+  sampleProduct:
+    name: "Demo Widget"
+    price: "19.99"
+    sku: "DEMO-WIDGET-1"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi

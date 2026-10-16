@@ -1,0 +1,19 @@
+{{- include "store.require" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.db.fullname" . }}
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.database.service.port }}
+      targetPort: mysql
+      protocol: TCP
+      name: mysql
+  selector:
+    app.kubernetes.io/name: {{ include "store.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: database

@@ -45,11 +45,32 @@ Facts from the SDK before running, `mcp==2.3.0`: `LATEST_PROTOCOL_VERSION = 2026
 
 This spike does not decide D-001. It supplies the measurements.
 
+## Store chart bring-up (DOD-01, DOD-02)
+
+Pre-registered 2026-10-16, before `charts/store` was installed. Chart targets DOD-01 and DOD-02 on k3d.
+
+| # | Check | Expected | Actual | Result |
+|---|---|---|---|---|
+| SC-1 | `helm lint charts/store` | clean, 0 failures | 0 chart(s) failed, local and prod values | pass |
+| SC-2 | `scripts/check-charts.sh` | PASS portability, PASS prod leakage | both PASS, exit 0 | pass |
+| SC-3 | `kubectl get pods` | all pods Ready | db 1/1, wp 1/1, bootstrap Completed | pass |
+| SC-4 | `kubectl get pvc` | both PVCs Bound | `data-store-store-db-0`, `store-store-wp-content`, both Bound 2Gi local-path | pass |
+| SC-5 | bootstrap Job | Completed | `Complete 1/1` in 2m10s; WooCommerce 11.2.1 active, product 11 created | pass |
+| SC-6 | `curl -I http://store.localhost/` | HTTP 200 | `HTTP/1.1 200 OK`, Apache/2.4.68 | pass |
+| SC-7 | re-run `helm upgrade` | Job Completed, no duplicate product | revision 2, Job `Complete 1/1`; every stateful step logged SKIP; still exactly 1 product (id 11) | pass |
+| SC-8 | delete both pods | sample product still exists | both pods returned; product 11 `Demo Widget` sku `DEMO-WIDGET-1` price 19.99, count=1; storefront still 200 | pass |
+
+Routing confirmed after SC-8: `/shop/` 200, `/cart/` 200, `/demo-widget/` 301 to the canonical `/product/demo-widget/` which returns 200, `/checkout/` 302 to cart (normal WooCommerce behaviour for an empty cart).
+
+**Bug found and fixed during SC-5.** The first install failed with `database not reachable after 5 minutes` while MariaDB was healthy and `1/1 Running`. The `wordpress:cli` image ships wp-cli but not WordPress core, and the Job mounted only `wp-content`, so there was no `wp-config.php` and every `wp` command failed for want of configuration rather than connectivity. Fixed by giving the Job an `emptyDir` scratch root, `wp core download --skip-content` pinned to the serving image's 7.1.3, then `wp config create` with the database settings passed explicitly. `--skip-content` keeps the shared `wp-content` volume untouched.
+
+DOD-01 (browser checkout) is Kapardhi's to run. DOD-02 (order visible) is verified with WP-CLI afterwards.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
 |---|---|---|---|---|
-| K-01 | Runs on local Kubernetes (D-002) | k3d cluster `gw-local` on Colima (D-017) | 2026-10-15: node `k3d-gw-local-server-0` Ready, k3s `v1.35.5+k3s1`. Traefik pod Running. `local-path (default)` storageclass. `traefik` ingressclass. `curl -sI http://localhost` returns 404 from Traefik. Full results in `docs/build-log.md`. Becomes `pass` only when the full stack runs on it. | in progress |
+| K-01 | Runs on local Kubernetes (D-002) | k3d cluster `gw-local` on Colima (D-017) | 2026-10-15: node Ready, k3s `v1.35.5+k3s1`, Traefik Running, `local-path (default)`, `traefik` ingressclass. 2026-10-16: `charts/store` installed and serving at http://store.localhost/ (SC-1 to SC-8 all pass). Becomes `pass` when the gateway, Woo MCP server and dashboard also run. | in progress |
 | K-02 | Same charts deploy to k3s VPS, values-only differences | | Pre-registered (2026-10-16), before charts exist: run `scripts/check-charts.sh`. Expected: both checks PASS (portability, prod leakage). Script verified on 2026-10-16 to FAIL on a bad fixture, PASS on a clean one, and SKIP with no charts. See D-002. | todo |
 | K-03 | Helm only, `values-local.yaml` and `values-prod.yaml` | | | todo |
 | K-04 | Everything in cluster: store, DB, Woo MCP, gateway, dashboard | | | todo |

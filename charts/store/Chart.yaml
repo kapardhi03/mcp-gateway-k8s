@@ -1,0 +1,6 @@
+apiVersion: v2
+name: store
+description: WooCommerce store for the MCP gateway project. WordPress plus MariaDB, with a bootstrap Job that installs WooCommerce.
+type: application
+version: 0.1.0
+appVersion: "7.1.3"

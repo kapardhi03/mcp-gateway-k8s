@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store.wp.fullname" . }}
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wordpress
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: wp-content is a ReadWriteOnce volume, so two
+  # pods cannot mount it at once. A rolling update would deadlock with the new
+  # pod Pending on the volume the old pod still holds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "store.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: wordpress
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: wordpress
+    spec:
+      securityContext:
+        fsGroup: 33
+      containers:
+        - name: wordpress
+          image: "{{ .Values.wordpress.image.repository }}:{{ .Values.wordpress.image.tag }}"
+          imagePullPolicy: {{ .Values.wordpress.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "{{ include "store.db.fullname" . }}:{{ .Values.database.service.port }}"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKeys.password }}
+          # Readiness: HTTP GET / does touch the database. That is intended.
+          # If the database is down this pod cannot serve, so remove it from
+          # the Service until it can.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: {{ .Values.wordpress.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.wordpress.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.wordpress.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.wordpress.probes.readiness.failureThreshold }}
+          # Liveness: TCP only, never HTTP, because an HTTP GET would reach
+          # PHP and therefore the database. A database outage would then
+          # restart every WordPress pod. The restarts would not fix the
+          # database, and one failure would become two. Liveness asks "is this
+          # process wedged?"; readiness asks "can it serve right now?".
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.wordpress.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.wordpress.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.wordpress.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.wordpress.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.wordpress.resources | nindent 12 }}
+          volumeMounts:
+            - name: content
+              mountPath: /var/www/html/wp-content
+      volumes:
+        - name: content
+          persistentVolumeClaim:
+            claimName: {{ include "store.wp.fullname" . }}-content

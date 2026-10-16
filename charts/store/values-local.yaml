@@ -1,0 +1,10 @@
+# Local k3d overrides. See D-002, D-003, D-004.
+#
+# store.localhost was measured on 2026-10-16 to resolve and reach Traefik from
+# curl, Python httpx, Node fetch and a browser. See D-004.
+ingress:
+  className: traefik
+  host: store.localhost
+
+storage:
+  className: local-path

@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "store.db.fullname" . }}
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  serviceName: {{ include "store.db.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "store.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: database
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: mariadb
+          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
+          imagePullPolicy: {{ .Values.database.image.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKeys.rootPassword }}
+            - name: MARIADB_DATABASE
+              value: {{ .Values.database.name | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKeys.password }}
+          # Startup: absorbs first-boot data directory creation so liveness
+          # does not count failures during initialisation.
+          startupProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect"]
+            periodSeconds: {{ .Values.database.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.database.probes.startup.failureThreshold }}
+          # Readiness: keeps the pod out of the Service until MariaDB really
+          # accepts connections, so WordPress never races a half-started DB.
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            initialDelaySeconds: {{ .Values.database.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.database.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.database.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.database.probes.readiness.failureThreshold }}
+          # Liveness: legitimate here because this container IS the database,
+          # but deliberately lenient so a slow query or InnoDB recovery does
+          # not cause a restart loop.
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect"]
+            initialDelaySeconds: {{ .Values.database.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.database.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.database.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.database.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.database.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.storage.className }}
+        storageClassName: {{ .Values.storage.className }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.database.size }}

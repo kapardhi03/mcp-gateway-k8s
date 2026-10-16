@@ -1,0 +1,213 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "store.fullname" . }}-bootstrap
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bootstrap
+  annotations:
+    # post-install and post-upgrade so a helm upgrade re-runs it. Every step
+    # below is guarded, so re-running changes nothing once the store is set up.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    # Delete the previous Job object before creating this one. Without this a
+    # second helm upgrade fails: a Job's pod template is immutable.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: Never
+      securityContext:
+        # wp-cli runs as www-data so the files it writes match what the
+        # WordPress container expects on the shared wp-content volume.
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: wp-cli
+          image: "{{ .Values.bootstrap.image.repository }}:{{ .Values.bootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.bootstrap.image.pullPolicy }}
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "{{ include "store.db.fullname" . }}:{{ .Values.database.service.port }}"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKeys.password }}
+            - name: ADMIN_USER
+              value: {{ .Values.wordpress.admin.user | quote }}
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wordpress.admin.existingSecret }}
+                  key: {{ .Values.wordpress.admin.secretKeys.password }}
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wordpress.admin.existingSecret }}
+                  key: {{ .Values.wordpress.admin.secretKeys.email }}
+            - name: SITE_URL
+              value: "http://{{ .Values.ingress.host }}"
+            - name: SITE_TITLE
+              value: {{ .Values.wordpress.siteTitle | quote }}
+            - name: WC_VERSION
+              value: {{ .Values.bootstrap.woocommerceVersion | quote }}
+            - name: WP_VERSION
+              value: {{ .Values.bootstrap.wordpressVersion | quote }}
+            - name: PRODUCT_NAME
+              value: {{ .Values.bootstrap.sampleProduct.name | quote }}
+            - name: PRODUCT_PRICE
+              value: {{ .Values.bootstrap.sampleProduct.price | quote }}
+            - name: PRODUCT_SKU
+              value: {{ .Values.bootstrap.sampleProduct.sku | quote }}
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
+          volumeMounts:
+            # Scratch WordPress root. The wordpress:cli image ships wp-cli but
+            # NOT WordPress core, so without this there is no wp-config.php and
+            # every wp command fails with a misleading "database not reachable".
+            - name: html
+              mountPath: /var/www/html
+            # The real wp-content, shared with the WordPress pod, so plugins
+            # installed here persist and are the ones WordPress serves.
+            - name: content
+              mountPath: /var/www/html/wp-content
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+
+              WP="wp --path=/var/www/html --allow-root"
+
+              # wp-cli needs WordPress core and a wp-config.php before any
+              # command works. Core goes in an emptyDir because it is scratch;
+              # --skip-content leaves the shared wp-content volume alone.
+              if [ ! -f /var/www/html/wp-includes/version.php ]; then
+                echo "RUN   core download $WP_VERSION"
+                $WP core download --version="$WP_VERSION" --skip-content
+              else
+                echo "SKIP  core files already present"
+              fi
+
+              if [ ! -f /var/www/html/wp-config.php ]; then
+                echo "RUN   config create"
+                $WP config create \
+                  --dbhost="$WORDPRESS_DB_HOST" \
+                  --dbname="$WORDPRESS_DB_NAME" \
+                  --dbuser="$WORDPRESS_DB_USER" \
+                  --dbpass="$WORDPRESS_DB_PASSWORD" \
+                  --skip-check
+              else
+                echo "SKIP  wp-config.php already present"
+              fi
+
+              echo "== waiting for the database to accept connections =="
+              i=0
+              until $WP db check >/dev/null 2>&1; do
+                i=$((i + 1))
+                if [ "$i" -gt 60 ]; then
+                  echo "database not reachable after 5 minutes" >&2
+                  $WP db check || true
+                  exit 1
+                fi
+                sleep 5
+              done
+              echo "database reachable"
+
+              # --- core install (guarded) ---
+              if $WP core is-installed >/dev/null 2>&1; then
+                echo "SKIP  core already installed"
+              else
+                echo "RUN   core install"
+                $WP core install \
+                  --url="$SITE_URL" \
+                  --title="$SITE_TITLE" \
+                  --admin_user="$ADMIN_USER" \
+                  --admin_password="$ADMIN_PASSWORD" \
+                  --admin_email="$ADMIN_EMAIL" \
+                  --skip-email
+              fi
+
+              # --- WooCommerce at a pinned version (guarded) ---
+              HAVE_WC="$($WP plugin list --name=woocommerce --field=version 2>/dev/null || true)"
+              if [ "$HAVE_WC" = "$WC_VERSION" ]; then
+                echo "SKIP  woocommerce $WC_VERSION already installed"
+              else
+                echo "RUN   install woocommerce $WC_VERSION (had: ${HAVE_WC:-none})"
+                $WP plugin install woocommerce --version="$WC_VERSION" --force
+              fi
+              if $WP plugin is-active woocommerce >/dev/null 2>&1; then
+                echo "SKIP  woocommerce already active"
+              else
+                echo "RUN   activate woocommerce"
+                $WP plugin activate woocommerce
+              fi
+
+              # --- Cash on Delivery (guarded) ---
+              COD="$($WP option get woocommerce_cod_settings --format=json 2>/dev/null || true)"
+              case "$COD" in
+                *'"enabled":"yes"'*)
+                  echo "SKIP  cash on delivery already enabled" ;;
+                *)
+                  echo "RUN   enable cash on delivery"
+                  $WP option update woocommerce_cod_settings \
+                    '{"enabled":"yes","title":"Cash on delivery","description":"Pay with cash upon delivery.","instructions":"Pay with cash upon delivery.","enable_for_methods":[],"enable_for_virtual":"yes"}' \
+                    --format=json ;;
+              esac
+
+              # --- pretty permalinks (guarded) ---
+              PERMA="$($WP option get permalink_structure 2>/dev/null || true)"
+              if [ "$PERMA" = "/%postname%/" ]; then
+                echo "SKIP  permalinks already pretty"
+              else
+                echo "RUN   set pretty permalinks"
+                $WP option update permalink_structure '/%postname%/'
+                $WP rewrite flush --hard
+              fi
+
+              # --- one sample product (guarded by SKU) ---
+              # Guarding on SKU is what makes a repeat helm upgrade safe: the
+              # product is created once and never duplicated.
+              EXISTING="$($WP post list --post_type=product --meta_key=_sku --meta_value="$PRODUCT_SKU" --format=ids 2>/dev/null || true)"
+              if [ -n "$EXISTING" ]; then
+                echo "SKIP  sample product already exists (ids: $EXISTING)"
+              else
+                echo "RUN   create sample product"
+                PID="$($WP post create \
+                  --post_type=product \
+                  --post_title="$PRODUCT_NAME" \
+                  --post_status=publish \
+                  --porcelain)"
+                $WP post meta update "$PID" _sku "$PRODUCT_SKU"
+                $WP post meta update "$PID" _regular_price "$PRODUCT_PRICE"
+                $WP post meta update "$PID" _price "$PRODUCT_PRICE"
+                $WP post meta update "$PID" _manage_stock no
+                $WP post meta update "$PID" _stock_status instock
+                $WP post meta update "$PID" _virtual no
+                $WP wc product_cat 2>/dev/null >/dev/null || true
+                echo "created product $PID"
+              fi
+
+              echo "== bootstrap complete =="
+              $WP plugin list --name=woocommerce --fields=name,status,version
+              $WP post list --post_type=product --fields=ID,post_title --format=table
+      volumes:
+        # Scratch only. Thrown away with the pod; nothing here is persisted.
+        - name: html
+          emptyDir: {}
+        - name: content
+          persistentVolumeClaim:
+            claimName: {{ include "store.wp.fullname" . }}-content
+{{- end }}

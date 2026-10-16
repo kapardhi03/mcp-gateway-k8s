@@ -1,0 +1,29 @@
+{{- if .Values.ingress.enabled }}
+{{- include "store.require" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "store.fullname" . }}
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # Both the class and the host come from values. Nothing cluster-specific is
+  # hardcoded here, so the chart installs unchanged on another ingress
+  # controller. See D-002 and scripts/check-charts.sh.
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "store.wp.fullname" . }}
+                port:
+                  number: {{ .Values.wordpress.service.port }}
+{{- end }}

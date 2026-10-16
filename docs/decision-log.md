@@ -11,8 +11,8 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 |---|---|---|---|
 | D-001 | Which MCP spec version does the gateway speak? | Gateway, Woo MCP server | open, needs spike |
 | D-002 | Which local Kubernetes? | Day 1 | decided |
-| D-003 | Which Ingress controller? | Day 1 | open |
-| D-004 | Local domain approach | Day 1 | open |
+| D-003 | Which Ingress controller? | Day 1 | decided |
+| D-004 | Local domain approach | Day 1 | open, measured |
 | D-005 | Where do the WordPress and DB images and chart come from? | Day 1 | decided |
 | D-006 | How does the Woo MCP server talk to the store? | Woo MCP server | open |
 | D-007 | Language and MCP SDK for gateway and Woo MCP server | All backend code | decided, revisit after D-001 spike |
@@ -27,6 +27,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-016 | Timeline and VPS target | Planning | open |
 | D-017 | Local toolchain (Colima 0.10.3, Helm 4.x) | Day 1, all charts | decided |
 | D-018 | Repo visibility before submission | Submission | decided |
+| D-019 | How dev and prod secrets reach the chart | Store chart, all charts | open, needs Kapardhi's words |
 
 ---
 
@@ -106,11 +107,17 @@ Answer: k3d bundles Traefik and local-path, the same as the k3s VPS. In my chart
 
 **Claude's recommendation.** A. Mention C in the tradeoffs note as the production direction.
 
-**Kapardhi's choice:**
-**Kapardhi's reason (own words):**
-**"Why not X?" asked and answer:**
-**What would change my mind:**
-**Status:** open
+**Facts verified (2026-10-16).** The k3d cluster `gw-local` ships Traefik by default: `kubectl get ingressclass` returns `traefik  traefik.io/ingress-controller`, installed by k3s's Helm controller as chart `traefik-39.0.701+up39.0.7`, app v3.6.12. `curl -sI http://localhost` returns Traefik's 404 with no routes defined.
+
+**Kapardhi's choice:** A. Traefik, with standard `Ingress` objects.
+
+**Kapardhi's reason:** Bundled with k3s on both sides, ingress-nginx is retired, and the requirements say Ingress, not Gateway API. (AI-drafted, accepted by Kapardhi)
+
+**"Why not X?" asked and answer:** Not asked. Tooling choice under the amended protocol.
+
+**What would change my mind:** Not recorded.
+
+**Status:** decided
 
 ---
 
@@ -130,11 +137,27 @@ The requirements say this must be documented.
 
 **Claude's recommendation.** No strong pick. Test A with Claude Code and curl first. If it fails anywhere, use B. Avoid C because the demo should not depend on an outside DNS service.
 
-**Kapardhi's choice:**
-**Kapardhi's reason (own words):**
-**"Why not X?" asked and answer:**
-**What would change my mind:**
-**Status:** open
+**Measured (2026-10-16), before choosing.** `store.localhost` was resolved and fetched four ways against the running k3d cluster, with Traefik answering and no route defined yet. All four reached Traefik.
+
+| Client | Resolves | Reached Traefik |
+|---|---|---|
+| macOS resolver (`getaddrinfo`, `dscacheutil`) | yes, `127.0.0.1` and `::1` | n/a |
+| `curl` | yes | yes, HTTP 404 |
+| Python `httpx` | yes | yes, HTTP 404 |
+| Node `fetch` | yes | yes, HTTP 404 |
+| Browser | yes | yes, Traefik's `404 page not found` |
+
+No fallback was needed, so `*.gw.test` with `/etc/hosts` was not used. `.local` was excluded on purpose: macOS routes it to mDNS.
+
+**Kapardhi's choice:** _TODO Kapardhi: confirm A, `*.localhost`_
+
+**Kapardhi's reason (own words):** _TODO Kapardhi_
+
+**"Why not X?" asked and answer:** _TODO Kapardhi_
+
+**What would change my mind:** _TODO Kapardhi_
+
+**Status:** open, measured. The store chart uses `store.localhost` in `values-local.yaml` on the strength of the measurement above; confirming this entry makes it official.
 
 ---
 
@@ -459,3 +482,35 @@ The four that interest me most: 6 Security hardening, 2 Tool permissions, 1 VPS 
 **What would change my mind:** Not recorded. Housekeeping.
 
 **Status:** decided
+
+---
+
+## D-019: How dev and prod secrets reach the chart
+
+**Why this matters.** The requirements forbid secrets in source, in committed values files and in image layers. This is a security decision the demo video must explain, so under the amended protocol it needs Kapardhi's own words.
+
+**Context.** The store chart needs a MariaDB root password, a MariaDB application password and a WordPress admin password. A chart that takes passwords as values puts them in `values-local.yaml` or on the `helm install` command line, where they reach shell history and, if anyone is careless, git.
+
+**Options.**
+- A. Chart takes `existingSecret` names only. Secrets are created outside Helm. A dev script generates random ones locally; production uses whatever the operator already has.
+- B. Chart generates passwords with Helm's `randAlphaNum` and stores them in a Secret it owns.
+- C. Chart takes passwords as values, documented as "do not commit".
+
+**Tradeoffs.**
+- A: nothing secret ever enters a values file or the chart's own templates. Needs one extra step before `helm install`. Works the same in dev and prod.
+- B: convenient, but Helm regenerates on some upgrade paths and the value lands in the release's stored manifest.
+- C: simplest to run, and the easiest to get wrong. One `git add` away from a leak.
+
+**Claude's recommendation.** A.
+
+**Built this way now, pending the entry.** The chart reads `existingSecret` names only, and `scripts/dev-secrets.sh` creates random Secrets with `kubectl` if and only if they do not already exist.
+
+**Kapardhi's choice:** _TODO Kapardhi_
+
+**Kapardhi's reason (own words):** _TODO Kapardhi_
+
+**"Why not X?" asked and answer:** _TODO Kapardhi_
+
+**What would change my mind:** _TODO Kapardhi_
+
+**Status:** open, needs Kapardhi's words

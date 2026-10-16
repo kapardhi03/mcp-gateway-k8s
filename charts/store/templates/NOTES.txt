@@ -1,0 +1,16 @@
+Store installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+{{ if .Values.ingress.enabled -}}
+Storefront: http://{{ .Values.ingress.host }}/
+Admin:      http://{{ .Values.ingress.host }}/wp-admin/
+{{- end }}
+
+Admin user: {{ .Values.wordpress.admin.user }}
+Admin password (from the Secret this chart was pointed at, see D-019):
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.wordpress.admin.existingSecret }} \
+    -o jsonpath='{.data.{{ .Values.wordpress.admin.secretKeys.password }}}' | base64 -d
+
+Bootstrap Job output:
+
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "store.fullname" . }}-bootstrap
