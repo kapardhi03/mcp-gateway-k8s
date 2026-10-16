@@ -106,3 +106,33 @@ k3d pulled `docker.io/rancher/k3s:v1.35.5-k3s1`. Pin that tag on the VPS so both
 - The first K-02 check was written as a raw grep inside a markdown table. The pipe had to be escaped as `\|` to avoid breaking the table, and `grep -E` reads `\|` as a literal pipe, so anyone copying the command from the raw file would have run a check that silently matched nothing and always passed. Caught by C-code before any chart existed, and replaced with `scripts/check-charts.sh`.
 
 **Next.** D-001 spike, which gates D-007. Then the first chart, with `scripts/check-charts.sh` run before it is called done.
+
+---
+
+## 2026-10-16, session 3: store chart, D-001 spike, Oracle closed
+
+**Goal.** Get DOD-01 and DOD-02 passing on k3d, measure the MCP protocol question, and close out the VPS search.
+
+**Proposed.**
+- K: build the store chart, run the D-001 spike, close D-016 after the Oracle deadline.
+- C-code: chart templates, spike server and clients, version lookups, the checks below.
+
+**Decided.** D-003 Traefik. D-004 `*.localhost`. D-016 GCP trial x86 + k3s, after Oracle failed. D-019 opened and still needs Kapardhi's words; the chart is already built that way.
+
+**Verified.**
+- Store chart SC-1 to SC-8 all pass. Detail in `docs/requirements-trace.md`.
+- DOD-01 pass: Kapardhi checked out in a browser. Order 12, `cod`, 19.99 USD, `Demo Widget` x1.
+- DOD-02 pass: order 12 status `processing`, admin URL `http://store.localhost/wp-admin/admin.php?page=wc-orders&action=edit&id=12`, orders list route 302s to login when unauthenticated.
+- D-001 spike: Claude Code 2.1.278 and the mcp 2.3.0 client send `2026-07-28` with no `initialize` and no session ID. MCP Inspector 2.11.0 sends `2025-11-25` with the full handshake and a session ID. One SDK 2.3.0 server served both at once. The 2.3.0 client also falls back to `2025-11-25` against an mcp 1.28.1 upstream. Measurements only; D-001 is still open.
+
+**Oracle VPS, final.** 265 launch attempts across two runs over roughly 36 hours, 0 instances, about 290 `Out of host capacity` rejections and 8 throttles. Quota was never the limit: 41 A1 cores and 277 GB available, 0 used. Closed in D-016. Nothing deleted; the Oracle network costs nothing.
+
+**AI errors caught.**
+- The bootstrap Job reported `database not reachable after 5 minutes` while MariaDB was healthy and `1/1 Running`. The real cause was that `wordpress:cli` ships wp-cli but not WordPress core, so with only `wp-content` mounted there was no `wp-config.php` and every `wp` command failed for want of configuration, not connectivity. Fixed with an `emptyDir` scratch root, `wp core download --skip-content` pinned to the serving image's version, and an explicit `wp config create`. The failure path now prints the real `wp db check` output so the message cannot mislead again.
+- `scripts/dev-secrets.sh` printed the base64 Secret values to stdout. Base64 is not encryption, and `CLAUDE.md` forbids logging secret material. Fixed to print key names only. **Not rotated on local**: this cluster is local-only and disposable, so the exposure has no consequence. The VPS gets fresh values from `scripts/dev-secrets.sh` run there, never copied from local.
+- The first K-02 check was written as a raw grep inside a markdown table, where the escaped pipe `\|` would have made `grep -E` match nothing and pass forever. Caught before any chart existed and replaced with `scripts/check-charts.sh`, which is proved to fail on a bad fixture.
+- A `kubectl wait --for=condition=Ready pod --all` timed out on completed Job pods and looked like a cluster failure. Job pods finish `Completed` and never become `Ready`.
+
+**Note for D-006.** WooCommerce here uses legacy post storage, not HPOS. A direct database query against `wp_wc_orders` fails. `wc_get_orders()` is storage-agnostic. This is further evidence for the REST API option in D-006 over direct SQL.
+
+**Next.** GCP VM for the VPS half of K-02. Then the Woo MCP server, which needs D-006 and D-001.

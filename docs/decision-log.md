@@ -12,7 +12,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-001 | Which MCP spec version does the gateway speak? | Gateway, Woo MCP server | open, needs spike |
 | D-002 | Which local Kubernetes? | Day 1 | decided |
 | D-003 | Which Ingress controller? | Day 1 | decided |
-| D-004 | Local domain approach | Day 1 | open, measured |
+| D-004 | Local domain approach | Day 1 | decided |
 | D-005 | Where do the WordPress and DB images and chart come from? | Day 1 | decided |
 | D-006 | How does the Woo MCP server talk to the store? | Woo MCP server | open |
 | D-007 | Language and MCP SDK for gateway and Woo MCP server | All backend code | decided, revisit after D-001 spike |
@@ -24,7 +24,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-013 | API key format and hashing | Team features | open |
 | D-014 | How the chat agent acts as the logged-in user | Chat agent | open |
 | D-015 | Which stretch goal(s) to go deep on | After core passes | deferred |
-| D-016 | Timeline and VPS target | Planning | open |
+| D-016 | Timeline and VPS target | Planning | decided |
 | D-017 | Local toolchain (Colima 0.10.3, Helm 4.x) | Day 1, all charts | decided |
 | D-018 | Repo visibility before submission | Submission | decided |
 | D-019 | How dev and prod secrets reach the chart | Store chart, all charts | open, needs Kapardhi's words |
@@ -149,15 +149,15 @@ The requirements say this must be documented.
 
 No fallback was needed, so `*.gw.test` with `/etc/hosts` was not used. `.local` was excluded on purpose: macOS routes it to mDNS.
 
-**Kapardhi's choice:** _TODO Kapardhi: confirm A, `*.localhost`_
+**Kapardhi's choice:** A. `*.localhost`.
 
-**Kapardhi's reason (own words):** _TODO Kapardhi_
+**Kapardhi's reason:** Passed curl, httpx, Node fetch and a browser with no machine setup, so a reviewer can run it without editing `/etc/hosts`. `.local` avoided because macOS sends it to mDNS. (AI-drafted, accepted by Kapardhi)
 
-**"Why not X?" asked and answer:** _TODO Kapardhi_
+**"Why not X?" asked and answer:** Not asked. Settled by measurement under the amended protocol.
 
-**What would change my mind:** _TODO Kapardhi_
+**What would change my mind:** Any client in the demo fails to resolve it; then `/etc/hosts` with `*.gw.test`. (AI-drafted, accepted by Kapardhi)
 
-**Status:** open, measured. The store chart uses `store.localhost` in `values-local.yaml` on the strength of the measurement above; confirming this entry makes it official.
+**Status:** decided. In use: `charts/store/values-local.yaml` sets `ingress.host: store.localhost`, verified serving HTTP 200 on 2026-10-16.
 
 ---
 
@@ -407,9 +407,29 @@ The four that interest me most: 6 Security hardening, 2 Tool permissions, 1 VPS 
 
 **Needed from Kapardhi.** Start date and deadline, and which VPS or free tier will run k3s.
 
-**Kapardhi's choice:**
-**Kapardhi's reason (own words):**
-**Status:** open
+**Facts measured (2026-10-14 to 2026-10-16).** Oracle Always Free Ampere A1 was attempted in `ap-hyderabad-1`, the tenancy home region and the only region where Always Free A1 exists. Two runs, **265 launch attempts** (148 then 117), spread over roughly 36 hours with a hard deadline of 2026-10-16 20:00 IST. Result: 0 instances. Roughly 290 `Out of host capacity` rejections and 8 HTTP 429 throttles. Nothing was misconfigured: `oci limits resource-availability get` showed 41 A1 cores and 277 GB available with 0 used, auth worked, and the VCN, internet gateway, route table, security list and public subnet were all `AVAILABLE`. `ap-hyderabad-1` has a single availability domain, so each cycle was one attempt. Evidence: `~/oci-retry/launch.log` (outside the repo).
+
+**Options after the Oracle attempt failed.**
+- A. Keep waiting on Oracle A1.
+- B. Google Cloud $300 free trial, x86 VM, k3s.
+- C. A paid VPS.
+
+**Tradeoffs.**
+- A: free forever if it ever lands, but 265 attempts produced nothing and there is no signal about when capacity returns.
+- B: no spend inside the trial credit, available immediately, x86 rather than arm64. The chart's images are multi-arch (D-005), so the architecture change costs nothing.
+- C: reliable and immediate, but costs money for a project that does not need to.
+
+**Kapardhi's choice:** B. Google Cloud trial, x86 VM, k3s.
+
+**Kapardhi's reason:** Zero spend; Oracle Hyderabad had no A1 capacity after 265 attempts. (AI-drafted, accepted by Kapardhi)
+
+**"Why not X?" asked and answer:** Not asked. Infrastructure choice under the amended protocol.
+
+**What would change my mind:** An Oracle A1 instance becomes available. (AI-drafted, accepted by Kapardhi)
+
+**Note.** Nothing is deleted on Oracle. The VCN, gateway, route table, security list and subnet cost nothing under Always Free, and `~/oci-retry/launch-a1.sh` can be restarted against them at any time.
+
+**Status:** decided
 
 ---
 

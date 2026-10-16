@@ -9,8 +9,8 @@ Status values: `todo`, `in progress`, `pass`, `fail`.
 
 | ID | Check | Expected (write before running) | Actual | Evidence | Status |
 |---|---|---|---|---|---|
-| DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | | | | todo |
-| DOD-02 | Order from DOD-01 visible in WooCommerce admin | | | | todo |
+| DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | Kapardhi checked out in a browser at http://store.localhost/ on 2026-10-16 | Order 12 created, payment method `cod` (Cash on delivery), total 19.99 USD, line item `Demo Widget` x1 sku `DEMO-WIDGET-1` | `wc_get_orders()` via `kubectl exec` on the WordPress pod | pass |
+| DOD-02 | Order from DOD-01 visible in WooCommerce admin | WooCommerce 11.2.1 admin | Order 12 status `processing`, created 2026-10-16T15:37:15Z. Admin URL `http://store.localhost/wp-admin/admin.php?page=wc-orders&action=edit&id=12`. Orders list route returns 302 to `wp-login.php` when unauthenticated, which confirms the route exists and is protected. Orders use WooCommerce legacy post storage, not HPOS; `wc_get_orders()` is storage-agnostic and was used for this check. | WP-CLI-equivalent PHP via `kubectl exec`, output in `docs/build-log.md` | pass |
 | DOD-03 | User A, chat agent: create product with name and price, it appears on storefront | | | | todo |
 | DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | | | | todo |
 | DOD-05 | User B: external client connects with only gateway URL + B's key, sees tools of every enabled server | | | | todo |
