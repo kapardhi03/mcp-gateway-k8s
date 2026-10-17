@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "woo-mcp.fullname" . }}
+  labels:
+    {{- include "woo-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "woo-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "woo-mcp.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: woo-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            # SIGNED. See the comment in values.yaml and D-006.
+            - name: STORE_HOME_URL
+              value: {{ required "store.homeUrl must be set" .Values.store.homeUrl | quote }}
+            # DIALLED. Never signed.
+            - name: STORE_SERVICE_URL
+              value: {{ required "store.serviceUrl must be set" .Values.store.serviceUrl | quote }}
+            - name: WOO_TIMEOUT_SECONDS
+              value: {{ .Values.woo.timeoutSeconds | quote }}
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.woo.existingSecret }}
+                  key: {{ .Values.woo.secretKeys.consumerKey }}
+            - name: WOO_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.woo.existingSecret }}
+                  key: {{ .Values.woo.secretKeys.consumerSecret }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem is on, so give the process a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

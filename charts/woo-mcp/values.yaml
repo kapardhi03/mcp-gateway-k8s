@@ -1,0 +1,108 @@
+# Defaults for the woo-mcp chart.
+#
+# No secret value appears here. The chart takes the NAME of a Secret that
+# already exists in the namespace. See D-019 and scripts/dev-secrets.sh.
+#
+# There is deliberately NO ingress section. This server is cluster-internal
+# only and must not be reachable from outside (W-08). The gateway is the only
+# thing allowed to call it, enforced by the NetworkPolicy below.
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  # Set per environment. Local loads the image with `k3d image import` and
+  # never pulls from a registry; prod pulls from GHCR. See D-020.
+  repository: ghcr.io/kapardhi03/woo-mcp
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Prod only. Name of an imagePullSecret created by scripts/dev-secrets.sh.
+# Empty locally, because local never pulls.
+imagePullSecrets: []
+
+service:
+  port: 8000
+
+# ---------------------------------------------------------------------------
+# TWO store URLs, and they are not interchangeable. See D-006 and
+# defense-notes 3.6.
+#
+#   homeUrl    is SIGNED. WooCommerce builds its OAuth 1.0a signature base
+#              string from get_home_url(), NOT from the Host header and NOT
+#              from the address the client dialled. This must therefore be the
+#              store's configured home URL, the same one a browser uses.
+#
+#   serviceUrl is DIALLED. The cluster-internal ClusterIP Service. It is never
+#              signed. Traffic never leaves the cluster.
+#
+# Signing serviceUrl produces HTTP 401 "Invalid signature", which reads exactly
+# like a bad credential and sends you hunting in the wrong place. There is a
+# regression test pinning this: services/woo-mcp/tests/test_oauth.py.
+#
+# Local and prod differ ONLY in homeUrl.
+# ---------------------------------------------------------------------------
+store:
+  # Must be set per environment. This is the only value that differs between
+  # local and prod.
+  homeUrl: ""
+  # Identical in local and prod: the Service name is the same in both
+  # clusters, so this lives here rather than being repeated in both overrides.
+  serviceUrl: http://store-store-wp.store
+
+woo:
+  # Name of an existing Secret holding keys: consumer-key, consumer-secret.
+  existingSecret: woo-api
+  secretKeys:
+    consumerKey: consumer-key
+    consumerSecret: consumer-secret
+  # Every call to the store is bounded by this. A slow or dead store must
+  # surface as a tool error, never as a hang (WM-8).
+  timeoutSeconds: 10
+
+# The NetworkPolicy allows ingress ONLY from pods carrying this label.
+# Nothing else in the cluster can reach woo-mcp, including the storefront.
+networkPolicy:
+  enabled: true
+  allowFromPodLabels:
+    app.kubernetes.io/name: gateway
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+probes:
+  # Readiness and liveness both hit the MCP endpoint's TCP port only.
+  # They deliberately do NOT call the store: if WordPress goes down, woo-mcp
+  # is still healthy and must stay Ready so it can return a clear tool error.
+  # A probe that touched the store would restart this pod during a store
+  # outage and turn one failure into two. WM-8 tests exactly this.
+  readiness:
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

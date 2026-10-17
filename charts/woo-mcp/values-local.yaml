@@ -1,0 +1,9 @@
+# Local k3d overrides. See D-002, D-020.
+#
+# The image is built locally and loaded with `k3d image import`; local never
+# pulls from GHCR, which is what keeps the registry inside its free-plan
+# limits. The default pullPolicy IfNotPresent is what makes that work.
+#
+# homeUrl is the ONLY value that differs from values-prod.yaml.
+store:
+  homeUrl: http://store.localhost

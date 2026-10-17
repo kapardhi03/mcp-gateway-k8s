@@ -1,0 +1,11 @@
+# Production k3s VPS overrides. See D-002, D-020.
+#
+# homeUrl is the only store difference from values-local.yaml. The extra
+# imagePullSecrets entry is required because prod pulls the multi-arch image
+# from GHCR while local imports it directly; the secret is created by
+# scripts/dev-secrets.sh and never committed.
+store:
+  homeUrl: http://store.34.93.101.10.sslip.io
+
+imagePullSecrets:
+  - name: ghcr
