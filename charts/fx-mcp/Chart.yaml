@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fx-mcp
+description: Currency conversion MCP server. Cluster-internal only, no Ingress.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,7 @@
+# Production k3s VPS overrides. Prod pulls from GHCR with an imagePullSecret
+# created by scripts/dev-secrets.sh --ghcr.
+image:
+  tag: "0.1.0"
+
+imagePullSecrets:
+  - name: ghcr

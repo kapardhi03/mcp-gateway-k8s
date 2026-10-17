@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fx-mcp.fullname" . }}
+  labels:
+    {{- include "fx-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fx-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fx-mcp.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: fx-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            # No Secret reference anywhere: the rates API is keyless (D-010).
+            - name: FX_API_BASE
+              value: {{ .Values.fx.apiBase | quote }}
+            - name: FX_TIMEOUT_SECONDS
+              value: {{ .Values.fx.timeoutSeconds | quote }}
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem is on, so give the process a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

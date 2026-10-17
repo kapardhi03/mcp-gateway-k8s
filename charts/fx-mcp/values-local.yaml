@@ -1,0 +1,4 @@
+# Local k3d overrides. Image is imported with `k3d image import`, never
+# pulled from GHCR (D-020). Nothing else differs from the defaults.
+image:
+  tag: "0.1.0"
