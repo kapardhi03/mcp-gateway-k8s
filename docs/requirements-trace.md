@@ -157,6 +157,24 @@ the behaviour is not actually exercised. Setting the store timezone to a non-UTC
 WM-4 meaningful. That is a store configuration change and therefore Kapardhi's call, not an
 implementation detail.
 
+## Woo MCP server on the VPS (W-08 prod half)
+
+Pre-registered 2026-10-17, **before** the GHCR pull secret, the prod Woo API key or
+`charts/woo-mcp` existed on the VPS. Re-runs the four checks whose result could plausibly differ
+between k3d and k3s on a real host: protocol surface, timezone-dependent filtering, NetworkPolicy
+enforcement, and failure handling. WM-1, WM-3, WM-5 and WM-7 are environment-independent or already
+covered by the prod chart render, so they are not repeated.
+
+| # | Check | Expected (written before running) | Actual | Result |
+|---|---|---|---|---|
+| VWM-2 | `tools/list` from a gateway-labelled pod on the VPS | Exactly the same 5 tools as local: `create_product`, `get_order`, `list_orders`, `list_products`, `update_order_status`. | | todo |
+| VWM-4 | `list_orders(date=today)` on the VPS | The prod store has order 13, placed 2026-10-17T02:22:46Z, which is 07:52 on the 17th in Asia/Kolkata. With the store timezone set, `date=today` returns order 13. `date=2026-10-16` returns nothing, since prod has no orders from the 16th. | | todo |
+| VWM-6 | NetworkPolicy on k3s | Gateway-labelled pod connects. Unlabelled pod is blocked. On k3d the block showed as REFUSED rather than TIMEOUT; the same backend is in use here, so REFUSED is expected again. The check is that the unlabelled pod cannot connect while reaching WordPress fine. | | todo |
+| VWM-8 | Upstream failure on the VPS | Scale the prod WordPress deployment to 0, call a tool: an MCP tool error naming the unreachable store, within the 10s timeout, woo-mcp stays Ready with 0 restarts. Scale back to 1 and the same tool succeeds. | | todo |
+
+Image for prod is pulled from GHCR, not imported: `ghcr.io/kapardhi03/woo-mcp:0.1.1`, multi-arch
+`linux/arm64` + `linux/amd64`, 57.2 MB and 57.0 MB compressed respectively.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |

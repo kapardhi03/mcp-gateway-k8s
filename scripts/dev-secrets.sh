@@ -10,11 +10,18 @@
 # Idempotent: a Secret that already exists is left alone, so re-running this
 # never rotates a password out from under a running database.
 #
-# Usage: scripts/dev-secrets.sh [namespace]
+# Usage: scripts/dev-secrets.sh [namespace] [--ghcr]
+#   --ghcr also creates the imagePullSecret prod needs to pull from GHCR.
+#          Local does not need it: k3d imports the image directly (D-020).
 
 set -euo pipefail
 
 NAMESPACE="${1:-store}"
+WITH_GHCR=0
+for arg in "$@"; do
+  [ "$arg" = "--ghcr" ] && WITH_GHCR=1
+done
+
 DB_SECRET="store-db"
 ADMIN_SECRET="store-admin"
 WOO_SECRET="woo-api"
@@ -66,6 +73,29 @@ else
     --from-literal=consumer-key="ck_$(openssl rand -hex 20)" \
     --from-literal=consumer-secret="cs_$(openssl rand -hex 20)"
   echo "OK    secret/$WOO_SECRET created"
+fi
+
+# GHCR imagePullSecret, prod only. See D-020.
+#
+# The token is read from `gh auth token` (or GHCR_TOKEN) and piped straight
+# into kubectl. It is never echoed, never written to a file and never passed
+# as a command-line argument where it would show up in a process list.
+if [ "$WITH_GHCR" -eq 1 ]; then
+  if kubectl -n "$NAMESPACE" get secret ghcr >/dev/null 2>&1; then
+    echo "SKIP  secret/ghcr already exists"
+  else
+    token="${GHCR_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+    if [ -z "$token" ]; then
+      echo "FAIL  no GHCR token. Set GHCR_TOKEN or run: gh auth login" >&2
+      exit 1
+    fi
+    kubectl -n "$NAMESPACE" create secret docker-registry ghcr \
+      --docker-server=ghcr.io \
+      --docker-username="${GHCR_USER:-kapardhi03}" \
+      --docker-password="$token"
+    unset token
+    echo "OK    secret/ghcr created"
+  fi
 fi
 
 echo
