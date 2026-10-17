@@ -33,6 +33,7 @@ Sections follow the required demo video sections.
 | 3.3 | How do you handle name collisions? | | | todo |
 | 3.4 | What happens on a timeout? On a dead upstream? | | | todo |
 | 3.5 | Which MCP spec version, and why? | | | todo |
+| 3.6 | Why does woo-mcp need two store URLs? | | | todo |
 
 ## 4. Security posture
 

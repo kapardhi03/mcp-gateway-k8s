@@ -127,6 +127,36 @@ Order 13, not 12, because prod is a separate database from local. The serving im
 binary, so this used the same WP-CLI-equivalent PHP through `wp-load.php` as DOD-02, with
 `wc_get_orders()`, which is storage-agnostic across HPOS and legacy post storage.
 
+## Woo MCP server (W-01 to W-09, G-10 groundwork)
+
+Pre-registered 2026-10-17, **before any `services/woo-mcp` code exists** and before
+`charts/woo-mcp` exists. Local k3d only. The VPS run comes after all eight pass.
+
+| # | Check | Expected (written before the code exists) | Actual | Result |
+|---|---|---|---|---|
+| WM-1 | `pytest` on `services/woo-mcp`, and `scripts/check-charts.sh` | All unit tests pass, 0 failures. check-charts prints PASS portability and PASS prod leakage, exit 0. Includes the OAuth-trap regression test below. | | todo |
+| WM-2 | `tools/list` from a Python MCP SDK client in a pod labelled `app.kubernetes.io/name=gateway` | Exactly 5 tools, no more and no fewer: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`. Each has a strict input schema. | | todo |
+| WM-3 | `create_product(name, regular_price)` then fetch the storefront | Tool returns the new product id. The product is then visible on `http://store.localhost/` (or its own permalink) with the name and price given. | | todo |
+| WM-4 | `list_orders(date=today)` | **Corrected from the original wording.** Order 12 was created `2026-10-16T15:37:15+00:00`, so "today" (2026-10-17) cannot return it. Instead: place a fresh order today, then `list_orders(date=today)` returns that order and **does not** return order 12. Order 12 is the negative control that proves the date filter is real and not a no-op. | | todo |
+| WM-5 | `update_order_status(12, "completed")` | Order 12 moves from `processing` to `completed`. Confirmed by `wc_get_orders()` on the pod and visible at the wp-admin order URL. | | todo |
+| WM-6 | NetworkPolicy | A pod labelled `app.kubernetes.io/name=gateway` reaches the woo-mcp Service. An unlabelled pod in the same namespace times out rather than being refused. Both measured, with the timeout bounded so a hang is distinguishable from a pass. | | todo |
+| WM-7 | No route from outside | `kubectl get ingress -A` shows no Ingress object selecting woo-mcp. From the laptop there is no path to it: the only published hosts are the storefront ones, and the woo-mcp Service is ClusterIP. | | todo |
+| WM-8 | Upstream failure is handled | `kubectl scale deploy/<wp> --replicas=0`, then call a tool. The call returns an MCP tool error with a clear message within the configured timeout, the process does not crash or hang, and the woo-mcp pod stays `Ready` throughout. Then scale back to 1 and the same tool succeeds. | | todo |
+
+**OAuth-trap regression test (part of WM-1).** WooCommerce builds its signature base string from
+`get_home_url()`, not the Host header (D-006). woo-mcp therefore connects to one URL and signs
+another. A unit test asserts the signature is computed over `store.homeUrl`; it fails if the
+implementation ever signs `store.serviceUrl` instead. Without it, the trap can come back silently
+because a wrong signature looks exactly like a credentials problem.
+
+**Open question, does not block the build: the store's timezone is UTC.** The requirement is that
+"today" means the store's timezone, not UTC. Measured 2026-10-17: `timezone_string` is empty and
+`gmt_offset` is 0, so the store is UTC and the two answers are identical. woo-mcp will read the
+timezone from WooCommerce settings as specified, which is correct either way, but on a UTC store
+the behaviour is not actually exercised. Setting the store timezone to a non-UTC zone would make
+WM-4 meaningful. That is a store configuration change and therefore Kapardhi's call, not an
+implementation detail.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
