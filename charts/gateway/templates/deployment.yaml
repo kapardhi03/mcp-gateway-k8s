@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gateway.fullname" . }}
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "gateway.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "gateway.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            # PGPASSWORD MUST come before DATABASE_URL. Kubernetes expands
+            # $(VAR) only against variables defined EARLIER in this list, so
+            # the other order silently ships the literal "$(PGPASSWORD)" and
+            # Postgres answers "password authentication failed", which reads
+            # like a wrong password rather than an unexpanded variable.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.secretKeys.password }}
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.postgres.user }}:$(PGPASSWORD)@{{ include "gateway.fullname" . }}-db:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.existingSecret }}
+                  key: {{ .Values.gateway.secretKeys.encryptionKey }}
+            - name: BOOTSTRAP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.existingSecret }}
+                  key: {{ .Values.gateway.secretKeys.bootstrapApiKey }}
+            - name: UPSTREAM_TIMEOUT_SECONDS
+              value: {{ .Values.gateway.upstreamTimeoutSeconds | quote }}
+            - name: HEALTH_INTERVAL_SECONDS
+              value: {{ .Values.gateway.healthIntervalSeconds | quote }}
+            {{- range $slug, $url := .Values.upstreams }}
+            - name: {{ upper $slug }}_MCP_URL
+              value: {{ $url | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

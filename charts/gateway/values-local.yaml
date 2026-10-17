@@ -1,0 +1,8 @@
+# Local k3d overrides. Image imported with `k3d image import` (D-020).
+ingress:
+  className: traefik
+  host: gateway.localhost
+
+postgres:
+  storage:
+    className: local-path

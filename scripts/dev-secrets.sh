@@ -25,6 +25,8 @@ done
 DB_SECRET="store-db"
 ADMIN_SECRET="store-admin"
 WOO_SECRET="woo-api"
+GW_DB_SECRET="gateway-db"
+GW_SECRET="gateway-secrets"
 
 rand() {
   # 32 chars, alphanumeric only. WordPress and MariaDB both cope with these
@@ -75,6 +77,36 @@ else
   echo "OK    secret/$WOO_SECRET created"
 fi
 
+# Gateway Secrets: Postgres password, encryption key, bootstrap API key.
+#
+# The encryption key is a Fernet key, which is urlsafe-base64 of 32 random
+# bytes. `openssl rand -base64 32 | tr '+/' '-_'` produces exactly that, and
+# it is verified against cryptography.Fernet before use.
+#
+# The bootstrap API key follows D-013 option A: gw_<8 hex>_<secret>. Only its
+# SHA-256 is stored by the gateway; this is the one time the raw value exists.
+if kubectl -n "$NAMESPACE" get secret "$GW_DB_SECRET" >/dev/null 2>&1; then
+  echo "SKIP  secret/$GW_DB_SECRET already exists"
+else
+  kubectl -n "$NAMESPACE" create secret generic "$GW_DB_SECRET" \
+    --from-literal=password="$(rand)"
+  echo "OK    secret/$GW_DB_SECRET created"
+fi
+
+if kubectl -n "$NAMESPACE" get secret "$GW_SECRET" >/dev/null 2>&1; then
+  echo "SKIP  secret/$GW_SECRET already exists"
+else
+  fernet="$(openssl rand -base64 32 | tr '+/' '-_')"
+  bootstrap="gw_$(openssl rand -hex 4)_$(openssl rand -hex 24)"
+  kubectl -n "$NAMESPACE" create secret generic "$GW_SECRET" \
+    --from-literal=encryption-key="$fernet" \
+    --from-literal=bootstrap-api-key="$bootstrap"
+  unset fernet bootstrap
+  echo "OK    secret/$GW_SECRET created"
+  echo "      read the bootstrap key back with:"
+  echo "      kubectl -n $NAMESPACE get secret $GW_SECRET -o jsonpath='{.data.bootstrap-api-key}' | base64 -d"
+fi
+
 # GHCR imagePullSecret, prod only. See D-020.
 #
 # The token is read from `gh auth token` (or GHCR_TOKEN) and piped straight
@@ -100,7 +132,7 @@ fi
 
 echo
 echo "Secrets in $NAMESPACE (key names only, never values):"
-for s in "$DB_SECRET" "$ADMIN_SECRET" "$WOO_SECRET"; do
+for s in "$DB_SECRET" "$ADMIN_SECRET" "$WOO_SECRET" "$GW_DB_SECRET" "$GW_SECRET"; do
   keys="$(kubectl -n "$NAMESPACE" get secret "$s" \
     -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null || true)"
   printf '  %-14s %s\n' "$s" "$keys"

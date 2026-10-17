@@ -1,0 +1,11 @@
+# Production k3s VPS overrides.
+ingress:
+  className: traefik
+  host: gateway.34.93.101.10.sslip.io
+
+postgres:
+  storage:
+    className: local-path
+
+imagePullSecrets:
+  - name: ghcr

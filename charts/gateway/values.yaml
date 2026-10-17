@@ -1,0 +1,128 @@
+# Defaults for the gateway chart.
+#
+# No secret value here. The chart takes the NAME of Secrets that already
+# exist. See D-019 and scripts/dev-secrets.sh.
+#
+# Unlike woo-mcp and fx-mcp this chart DOES have an Ingress: the gateway is
+# the one component clients are meant to reach (K-06).
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kapardhi03/gateway
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  port: 8080
+
+ingress:
+  enabled: true
+  # Empty on purpose. values-local.yaml and values-prod.yaml must set both.
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+
+# Upstreams the gateway registers on first start. Both in-cluster for phase 1
+# (D-010). Namespace-qualified short names, not .svc.cluster.local FQDNs,
+# which scripts/check-charts.sh flags as a local-only leak.
+upstreams:
+  woo: http://woo-woo-mcp.store:8000/mcp
+  fx: http://fx-fx-mcp.store:8000/mcp
+
+gateway:
+  # Per-upstream budget. A slow upstream costs this much and no more, because
+  # the fan-out is concurrent (GW-5).
+  upstreamTimeoutSeconds: 8
+  healthIntervalSeconds: 30
+  # Existing Secret holding keys: encryption-key, bootstrap-api-key.
+  existingSecret: gateway-secrets
+  secretKeys:
+    encryptionKey: encryption-key
+    bootstrapApiKey: bootstrap-api-key
+
+# Postgres. D-008: its own StatefulSet on the official image, separate
+# failure domain from the store's MariaDB, and able to back more than one
+# gateway replica later.
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    # Pinned. Confirmed linux/amd64 and linux/arm64.
+    tag: "18.2-alpine"
+    pullPolicy: IfNotPresent
+  database: gateway
+  user: gateway
+  # Existing Secret holding key: password.
+  existingSecret: gateway-db
+  secretKeys:
+    password: password
+  service:
+    port: 5432
+  storage:
+    className: ""
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  probes:
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 6
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 6
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+probes:
+  # /healthz is liveness: process up, no database touched. A database outage
+  # must not restart the gateway.
+  # /readyz is readiness: it reports the live tool count, so a gateway that
+  # cannot serve tools leaves the Service.
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
