@@ -1,0 +1,4 @@
+# Pinned. See D-007 (Python + MCP Python SDK) and D-001 (protocol version).
+mcp==2.3.0
+httpx2==2.13.1
+uvicorn==0.54.0
