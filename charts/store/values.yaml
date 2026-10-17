@@ -119,6 +119,13 @@ wordpress:
       email: email
   siteTitle: "Demo Store"
 
+  # Store timezone. "Today" in the Woo MCP server resolves in THIS zone, not
+  # UTC, because the Definition of Done asks "what orders came in today" and
+  # on a store east of UTC those are different sets of orders for part of each
+  # day. Identical in local and prod on purpose: the store is one business, so
+  # its trading day does not change with the cluster it runs in.
+  timezone: "Asia/Kolkata"
+
 # WooCommerce REST API credentials for the Woo MCP server. See D-006, D-019.
 #
 # The pair is generated OUTSIDE the cluster by scripts/dev-secrets.sh and put

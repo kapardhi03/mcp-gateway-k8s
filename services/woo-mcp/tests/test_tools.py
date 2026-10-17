@@ -252,3 +252,47 @@ def test_every_tool_surfaces_woo_errors():
     for fn, a, kw in calls:
         with pytest.raises(ToolError):
             fn(*a, **kw)
+
+
+# ------------------------------------ store timezone, with a frozen clock
+
+def test_today_uses_store_timezone_at_a_boundary_instant(monkeypatch):
+    """At 00:30 IST the IST date and the UTC date disagree. That is the only
+    time a UTC bug is visible, so freeze the clock there.
+
+    Instant: 2026-10-17T19:00:00Z == 2026-10-18T00:30:00+05:30.
+      correct (Asia/Kolkata): today is the 18th
+        -> window 2026-10-17T18:30:00Z .. 2026-10-18T18:30:00Z
+      wrong (UTC):            today is the 17th
+        -> window 2026-10-17T00:00:00Z .. 2026-10-18T00:00:00Z
+
+    A store whose timezone is read but then ignored would pass the earlier
+    tests and fail this one.
+    """
+    from datetime import datetime as real_datetime, timezone as real_tz
+
+    frozen = real_datetime(2026, 10, 17, 19, 0, 0, tzinfo=real_tz.utc)
+
+    class FrozenDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz else frozen
+
+    monkeypatch.setattr(server, "datetime", FrozenDateTime)
+
+    seen = {}
+
+    def h(req):
+        from urllib.parse import urlparse as up
+        if up(str(req.url)).path.endswith("/system_status"):
+            return httpx.Response(200, json={"environment": {"default_timezone": "Asia/Kolkata"}})
+        seen.update(q(req))
+        return httpx.Response(200, json=[])
+
+    mount(h)
+    server.list_orders(date="today")
+
+    assert seen["after"] == "2026-10-17T18:30:00", "today was not resolved in Asia/Kolkata"
+    assert seen["before"] == "2026-10-18T18:30:00"
+    # The UTC-shaped window must not appear.
+    assert seen["after"] != "2026-10-17T00:00:00", "today fell back to UTC"
