@@ -350,6 +350,50 @@ The requirements say the scheme must be documented.
 **What would change my mind:**
 **Status:** open
 
+**Build proceeds on the recommendation (2026-10-17).** The gateway is being built as option A,
+always prefix, `<server_slug>__<tool>`. This entry stays **open** until Kapardhi gives his words.
+
+**Tool-name rules verified in BOTH spec versions before writing the scheme (2026-10-17).**
+Read from the specification pages, not from an SDK or a client's behaviour.
+
+Both versions state the identical rules, word for word:
+
+- Tool names **SHOULD** be between 1 and 128 characters in length (inclusive).
+- Tool names **SHOULD** be considered case-sensitive.
+- "The following **SHOULD** be the only allowed characters: uppercase and lowercase ASCII letters
+  (A-Z, a-z), digits (0-9), underscore (\_), hyphen (-), and dot (.)"
+- Tool names **SHOULD NOT** contain spaces, commas, or other special characters.
+- Tool names **SHOULD** be unique within a server.
+
+**Regex.** `^[A-Za-z0-9_.-]{1,128}$`, at SHOULD level in both versions. There is no MUST-level
+constraint and no pattern in the schema itself.
+
+Sources:
+- https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+- https://modelcontextprotocol.io/specification/2026-07-28/server/tools
+
+**What this means for the scheme.** `__` is two underscores, inside the allowed set, so
+`woo__list_products` is conformant in both versions. The 128-character budget is generous: the
+longest current tool name is `woo__update_order_status` at 24.
+
+**The 2026-07-28 version adds a note that endorses this decision directly**, and it is worth
+quoting because it also rules out an alternative:
+
+> "Clients or proxies that aggregate tools from multiple servers **MAY** encounter naming
+> collisions (for example, two servers each exposing a `search` tool) and **SHOULD** implement a
+> disambiguation strategy such as prefixing tool names with a server identifier. The server `name`
+> (from `serverInfo`) is not guaranteed to be unique across servers and **SHOULD NOT** be relied
+> upon for disambiguation."
+
+So the slug must be assigned by the gateway and stored in its own registry. Taking it from the
+upstream's `serverInfo.name` is explicitly discouraged. The 2025-11-25 page carries no equivalent
+note, so this is guidance the newer version adds rather than changes.
+
+**One caveat found while checking.** A stricter `^[a-zA-Z0-9_]{1,64}$` is reported in the wild as a
+*client-side* rule, not spec text. `__` survives it but a dot or hyphen would not, and 64 rather
+than 128 is the tighter budget. The scheme therefore sticks to letters, digits and underscores
+only, which satisfies both the spec and the stricter client rule.
+
 ---
 
 ## D-010: The two other upstream MCP servers
