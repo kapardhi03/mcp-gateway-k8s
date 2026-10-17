@@ -420,6 +420,44 @@ only, which satisfies both the spec and the stricter client rule.
 **What would change my mind:**
 **Status:** open
 
+**Phase 1 proceeds on option A, in-cluster only (2026-10-17).** Two upstreams the gateway talks
+to: `woo-mcp` and a new `fx-mcp`. Entry stays **open** until Kapardhi gives his words.
+
+**Verified before choosing: GitHub's remote MCP server would work as a third upstream.**
+Endpoint `https://api.githubcopilot.com/mcp/`. GitHub's own install guides show Streamable HTTP
+with a personal access token sent as a static bearer header, which is exactly the shape the
+gateway's registry stores (`auth header type` + credential):
+
+```
+claude mcp add-json github '{"type":"http","url":"https://api.githubcopilot.com/mcp/",
+  "headers":{"Authorization":"Bearer YOUR_GITHUB_PAT"}}'
+```
+
+Sources: https://github.com/github/github-mcp-server and
+https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server
+
+Caveats worth recording. Several clients default to OAuth and treat the PAT as the alternative,
+and at least one reported failure was an OAuth path overriding the bearer header rather than a
+server limitation. **No token was created.** This is recorded so the option is proven available
+for phase 2 or for the demo's "server I did not write" point, not because phase 1 needs it.
+
+**The second in-cluster upstream: `fx-mcp`, backed by Frankfurter.**
+`https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,GBP,INR` returned HTTP 200 with
+**no Authorization header of any kind**, data sourced from the ECB. Measured 2026-10-17:
+
+```
+{"amount":1.0,"base":"USD","date":"2026-10-16","rates":{"EUR":0.88865,"GBP":0.74989,"INR":94.96}}
+```
+
+It also exposes a dated endpoint, `/v1/2026-10-16?base=USD&symbols=EUR`, which gives unit tests a
+fixed rate to assert against instead of a moving one. Free and keyless was verified by calling it,
+not by reading its marketing. `https://open.er-api.com/v6/latest/USD` is a keyless fallback if
+Frankfurter goes away.
+
+Why this pairing. The Definition of Done needs one prompt that uses two different upstreams.
+"Convert today's order total to EUR" needs orders from `woo-mcp` and a rate from `fx-mcp`, which is
+a natural question rather than a contrived one, and neither upstream depends on the other.
+
 ---
 
 ## D-011: LLM for the chat agent

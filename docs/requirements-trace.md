@@ -192,6 +192,27 @@ the `linux/arm64` and `linux/amd64` manifests and two as attestation manifests. 
 comparing each version's digest against the manifest list before touching anything. There is
 nothing safe to prune until a second tag exists.
 
+## Gateway phase 1 (GW-1 to GW-9)
+
+Pre-registered 2026-10-17, **before `services/gateway`, `services/fx-mcp`, `charts/gateway` or
+`charts/fx-mcp` existed**. Local k3d only. Builds on D-008 Postgres, D-009 prefixing and D-010
+in-cluster upstreams, all of which stay open awaiting Kapardhi's words.
+
+| # | Check | Expected (written before the code exists) | Actual | Result |
+|---|---|---|---|---|
+| GW-1 | `pytest` on `services/gateway` and `services/fx-mcp`, plus `scripts/check-charts.sh` and `scripts/check-cluster.sh` | All unit tests pass, 0 failures. check-charts PASS portability and PASS prod leakage, exit 0. check-cluster PASS with every Job at `failed == 0`. | | todo |
+| GW-2 | Claude Code on the laptop, given only the gateway URL and the bootstrap API key | Connects to `http://gateway.localhost/mcp`. `tools/list` shows the five `woo__*` tools and the `fx__*` tools, and nothing else. No upstream URL or upstream credential is configured on the client. | | todo |
+| GW-3 | MCP Inspector on the old protocol (2025-11-25) through the gateway | Same tool set as GW-2, proving the gateway serves both protocol versions (D-001 option C). `woo__list_orders` returns the local orders. | | todo |
+| GW-4 | One prompt using both upstreams | Today's order total from `woo__list_orders` converted to EUR with `fx__convert`. The answer cites both tools, so the cross-server requirement is met by a natural question rather than a contrived one. | | todo |
+| GW-5 | Kill the woo-mcp pod, then `tools/list` | The list still returns within the per-upstream timeout and still contains the `fx__*` tools. The `woo__*` tools are absent, and woo-mcp's status reads `Unreachable`. A dead upstream must not break the list or delay it past the timeout. | | todo |
+| GW-6 | Disable fx in the registry | `fx__*` tools disappear from `tools/list`. `woo__*` remain. No pod is deleted; this is a registry flag, not a scaling action. | | todo |
+| GW-7 | Audit rows | Every call made in GW-2 to GW-6 has a row: user, server, tool, timestamp, duration_ms, outcome. Outcomes match what happened, including the failures from GW-5. Durations are non-zero and plausible. | | todo |
+| GW-8 | No credential leakage | Take an upstream credential's literal value from the registry and grep for it across every tool response captured in GW-2 to GW-6 and across the full logs of the gateway and both upstream pods. Expected: **0 hits**. | | todo |
+| GW-9 | Bad auth is rejected and audited | A request with no API key and a request with a wrong API key are both rejected. Each rejection produces an audit row with a failure outcome. A rejected call must not reach any upstream. | | todo |
+
+GW-2 and GW-3 need Kapardhi to drive a client in his own terminal; the exact commands will be
+given and the run paused at that point.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
