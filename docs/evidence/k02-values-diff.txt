@@ -1,0 +1,39 @@
+diff --git a/charts/store/values-local.yaml b/charts/store/values-prod.yaml
+index b4fe5eb..289b621 100644
+--- a/charts/store/values-local.yaml
++++ b/charts/store/values-prod.yaml
+@@ -1,10 +1,30 @@
+-# Local k3d overrides. See D-002, D-003, D-004.
++# Production k3s VPS overrides. See D-002, D-003, D-004.
+ #
+-# store.localhost was measured on 2026-10-16 to resolve and reach Traefik from
+-# curl, Python httpx, Node fetch and a browser. See D-004.
++# sslip.io resolves store.34.93.101.10.sslip.io to 34.93.101.10, the VPS
++# static IP, with no DNS to buy or configure. See the D-004 addendum.
++# It must not be a localhost or .local name: scripts/check-charts.sh
++# fails the render if a local-only value leaks into a prod render.
+ ingress:
+   className: traefik
+-  host: store.localhost
++  host: store.34.93.101.10.sslip.io
+ 
+ storage:
+   className: local-path
++
++database:
++  resources:
++    requests:
++      cpu: 200m
++      memory: 384Mi
++    limits:
++      cpu: 1000m
++      memory: 768Mi
++
++wordpress:
++  resources:
++    requests:
++      cpu: 200m
++      memory: 384Mi
++    limits:
++      cpu: 1000m
++      memory: 1Gi

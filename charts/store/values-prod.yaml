@@ -1,11 +1,12 @@
-# Production k3s VPS overrides. See D-002, D-003.
+# Production k3s VPS overrides. See D-002, D-003, D-004.
 #
-# The host is a placeholder until the VPS exists and a domain is pointed at
-# it. It must not be a localhost or .local name: scripts/check-charts.sh
+# sslip.io resolves store.34.93.101.10.sslip.io to 34.93.101.10, the VPS
+# static IP, with no DNS to buy or configure. See the D-004 addendum.
+# It must not be a localhost or .local name: scripts/check-charts.sh
 # fails the render if a local-only value leaks into a prod render.
 ingress:
   className: traefik
-  host: store.example.com
+  host: store.34.93.101.10.sslip.io
 
 storage:
   className: local-path

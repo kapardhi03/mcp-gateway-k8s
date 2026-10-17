@@ -91,14 +91,28 @@ gcloud compute ssh gw-prod --project=mcp-kb8 --zone=asia-south1-a --tunnel-throu
 KUBECONFIG=~/.kube/gw-prod.yaml kubectl get nodes
 ```
 
-Ports 80 and 443 are not open yet. 6443 is never opened.
+**Updated 2026-10-17.** Ports 80 and 443 are now open, via firewall rule `allow-http-https`: `tcp:80,tcp:443` from `0.0.0.0/0` to target tag `k3s-prod` only, priority 1000. 22 is unchanged and still IAP-only (`allow-ssh-iap`, source `35.235.240.0/20`). 6443 is never opened.
+
+## Store smoke deploy to the VPS (K-02 evidence)
+
+Pre-registered 2026-10-17, before the prod host was set and before `helm install` ran on the VPS.
+Same chart as local, values-only differences. Prod host `store.34.93.101.10.sslip.io` (see D-004 addendum).
+
+| # | Check | Expected (written before running) | Actual | Result |
+|---|---|---|---|---|
+| SP-1 | `scripts/check-charts.sh` | PASS portability, PASS prod leakage, exit 0 | `PASS portability`, `PASS prod leakage`, exit 0 | pass |
+| SP-2 | `git diff --no-index charts/store/values-local.yaml charts/store/values-prod.yaml` | The only differences are the header comment, `ingress.host`, and the prod-only `database.resources` and `wordpress.resources` blocks. No change under `charts/store/templates/`. Diff saved as evidence. | Exactly those three differences and nothing else. `git status` and `git diff HEAD` on `charts/store/templates/` are both empty, so no template changed. Diff saved at `docs/evidence/k02-values-diff.txt`. | pass |
+| SP-3 | `helm install store charts/store -f charts/store/values-prod.yaml` on the VPS | All pods Ready, both PVCs Bound, bootstrap Job Completed | revision 1, STATUS deployed. `store-store-db-0` 1/1, `store-store-wp-fd6dc7997-gzvkt` 1/1, `store-store-bootstrap-4ghbm` Completed. PVCs `data-store-store-db-0` and `store-store-wp-content` both Bound 2Gi `local-path`. Job `Complete 1/1` in 2m55s; WooCommerce 11.2.1 active, product 11 `Demo Widget` created. Ingress `store-store` class `traefik` host `store.34.93.101.10.sslip.io`. | pass |
+| SP-4 | `curl -I http://store.34.93.101.10.sslip.io/` from the laptop over the public internet | `HTTP/1.1 200 OK` | `HTTP/1.1 200 OK`, Apache/2.4.68 (Debian), PHP/8.3.35. sslip.io resolved the host to `34.93.101.10`. Port posture re-checked after the firewall change: `https://34.93.101.10:6443` returns nothing, TCP 22 is not reachable publicly. | pass |
+
+K-02 is marked `pass` only if SP-1 to SP-4 all pass.
 
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
 |---|---|---|---|---|
 | K-01 | Runs on local Kubernetes (D-002) | k3d cluster `gw-local` on Colima (D-017) | 2026-10-15: node Ready, k3s `v1.35.5+k3s1`, Traefik Running, `local-path (default)`, `traefik` ingressclass. 2026-10-16: `charts/store` installed and serving at http://store.localhost/ (SC-1 to SC-8 all pass). Becomes `pass` when the gateway, Woo MCP server and dashboard also run. | in progress |
-| K-02 | Same charts deploy to k3s VPS, values-only differences | | Pre-registered (2026-10-16), before charts exist: run `scripts/check-charts.sh`. Expected: both checks PASS (portability, prod leakage). Script verified on 2026-10-16 to FAIL on a bad fixture, PASS on a clean one, and SKIP with no charts. See D-002. | todo |
+| K-02 | Same charts deploy to k3s VPS, values-only differences | `charts/store`, `values-local.yaml` and `values-prod.yaml` | 2026-10-17: SP-1 to SP-4 all pass. The same chart installed on local k3d and on the k3s VPS with no template change; the only differences are in the values files (`docs/evidence/k02-values-diff.txt`). Storefront serves `HTTP/1.1 200 OK` over the public internet at http://store.34.93.101.10.sslip.io/. See the store smoke deploy section above. | pass |
 | K-03 | Helm only, `values-local.yaml` and `values-prod.yaml` | | | todo |
 | K-04 | Everything in cluster: store, DB, Woo MCP, gateway, dashboard | | | todo |
 | K-05 | Persistent storage for store DB and WordPress content | | | todo |

@@ -159,6 +159,19 @@ No fallback was needed, so `*.gw.test` with `/etc/hosts` was not used. `.local` 
 
 **Status:** decided. In use: `charts/store/values-local.yaml` sets `ingress.host: store.localhost`, verified serving HTTP 200 on 2026-10-16.
 
+**Addendum 2026-10-17: the prod host.** D-004 chose the local domain. Prod needs one too.
+There is no paid domain for this project, so prod uses `store.34.93.101.10.sslip.io`.
+sslip.io resolves any `<ip>.sslip.io` name to that IP, so the VPS static IP `34.93.101.10`
+gets a hostname with nothing to buy and no DNS to configure. Local stays `*.localhost`.
+
+This is the option C that D-004 rejected for local, and the reason it was rejected still
+stands: it depends on a third-party DNS service being up during the demo. It is accepted
+for prod because the alternative is buying a domain, and because the local demo path, which
+is where the Definition of Done runs, does not touch sslip.io. If sslip.io is down during
+the demo, prod is reachable by IP and local is unaffected.
+
+This addendum records a new fact. It does not change the D-004 choice.
+
 ---
 
 ## D-005: Where do the WordPress and DB images and chart come from?
