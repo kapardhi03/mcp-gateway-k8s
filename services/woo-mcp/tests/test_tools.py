@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx2 as httpx
 import pytest
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from woo_mcp import server
 from woo_mcp.config import Config
 from woo_mcp.woo import WooClient, WooError
@@ -52,9 +54,9 @@ def test_list_products_summarises():
 
 def test_list_products_rejects_bad_per_page():
     mount(lambda r: httpx.Response(200, json=[]))
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.list_products(per_page=0)
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.list_products(per_page=101)
 
 
@@ -77,13 +79,13 @@ def test_create_product_posts_expected_body():
 @pytest.mark.parametrize("price", ["abc", "-1", ""])
 def test_create_product_rejects_bad_price(price):
     mount(lambda r: httpx.Response(200, json={}))
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.create_product(name="x", regular_price=price)
 
 
 def test_create_product_rejects_blank_name():
     mount(lambda r: httpx.Response(200, json={}))
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.create_product(name="   ", regular_price="1.00")
 
 
@@ -130,19 +132,19 @@ def test_list_orders_rejects_bad_date():
             return httpx.Response(200, json={"environment": {"default_timezone": "UTC"}})
         return httpx.Response(200, json=[])
     mount(h)
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.list_orders(date="17-10-2026")
 
 
 def test_get_order_rejects_non_positive_id():
     mount(lambda r: httpx.Response(200, json={}))
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.get_order(0)
 
 
 def test_update_order_status_rejects_unknown_status():
     mount(lambda r: httpx.Response(200, json={}))
-    with pytest.raises(WooError):
+    with pytest.raises(ToolError):
         server.update_order_status(12, "shipped")
 
 
@@ -166,7 +168,7 @@ def test_timeout_becomes_a_clear_tool_error():
     def h(req):
         raise httpx.ReadTimeout("too slow", request=req)
     mount(h, timeout=2.0)
-    with pytest.raises(WooError) as e:
+    with pytest.raises(ToolError) as e:
         server.list_products()
     msg = str(e.value)
     assert "did not respond within 2.0s" in msg
@@ -178,7 +180,7 @@ def test_http_error_includes_store_message():
         return httpx.Response(401, json={"code": "woocommerce_rest_authentication_error",
                                          "message": "Invalid signature"})
     mount(h)
-    with pytest.raises(WooError) as e:
+    with pytest.raises(ToolError) as e:
         server.list_products()
     assert "HTTP 401" in str(e.value)
     assert "Invalid signature" in str(e.value)
@@ -188,7 +190,7 @@ def test_connection_error_is_not_a_crash():
     def h(req):
         raise httpx.ConnectError("refused", request=req)
     mount(h)
-    with pytest.raises(WooError) as e:
+    with pytest.raises(ToolError) as e:
         server.list_products()
     assert "could not reach the store" in str(e.value)
 
@@ -208,3 +210,45 @@ def test_config_redacted_never_leaks_credentials():
     assert r["consumer_secret"] == "<redacted>"
     assert "ck_" not in str(r)
     assert "cs_" not in str(r)
+
+
+# -------------------------------------------- WM-8 regression: error surfacing
+
+def test_woo_error_becomes_tool_error_so_the_model_can_read_it():
+    """REGRESSION, WM-8.
+
+    The SDK only shows the model a message when a tool raises its own
+    ToolError. Any other exception is a crash: the model sees the bare
+    "Error executing tool <name>" and the real text is withheld. WooError
+    describes anticipated failures that the caller most needs to read, so
+    every tool converts it at the MCP boundary.
+
+    Caught live: with WordPress scaled to 0 the client received only
+    "Error executing tool list_products" until this conversion was added.
+    """
+    def h(req):
+        raise httpx.ConnectError("refused", request=req)
+
+    mount(h)
+    with pytest.raises(ToolError) as e:
+        server.list_products()
+    assert "could not reach the store" in str(e.value)
+    # and it must not be the bare crash message
+    assert str(e.value) != "Error executing tool list_products"
+
+
+def test_every_tool_surfaces_woo_errors():
+    """All five tools, not just the one that was tested by hand."""
+    def h(req):
+        raise httpx.ConnectError("refused", request=req)
+
+    mount(h)
+    calls = [
+        (server.list_products, (), {}),
+        (server.create_product, (), {"name": "n", "regular_price": "1.00"}),
+        (server.get_order, (12,), {}),
+        (server.update_order_status, (12, "completed"), {}),
+    ]
+    for fn, a, kw in calls:
+        with pytest.raises(ToolError):
+            fn(*a, **kw)

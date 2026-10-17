@@ -7,6 +7,7 @@ follows the D-001 spike: one SDK 2.3.0 server serves both 2026-07-28 and
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from datetime import datetime, timedelta
@@ -14,11 +15,34 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .config import Config
 from .woo import WooClient, WooError
 
 log = logging.getLogger("woo-mcp")
+
+
+def surfaced(fn):
+    """Turn a WooError into the SDK's ToolError so the model can read it.
+
+    The SDK only puts a message in front of the model when a tool raises its
+    own ToolError. Any other exception is treated as a crash: the model sees
+    "Error executing tool <name>" and the text is withheld. WooError describes
+    anticipated failures, a dead store or a 401, which are exactly the things
+    the caller needs to read, so convert at the MCP boundary.
+
+    This keeps woo.py free of any SDK import. WM-8 regression-tests it.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except WooError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
 
 mcp = MCPServer("woo-mcp", version="0.1.0")
 
@@ -101,6 +125,7 @@ def _order_summary(o: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
+@surfaced
 def list_products(search: str | None = None, per_page: int = 20) -> list[dict[str, Any]]:
     """List products in the store.
 
@@ -116,6 +141,7 @@ def list_products(search: str | None = None, per_page: int = 20) -> list[dict[st
 
 
 @mcp.tool()
+@surfaced
 def create_product(
     name: str,
     regular_price: str,
@@ -153,6 +179,7 @@ def create_product(
 
 
 @mcp.tool()
+@surfaced
 def list_orders(status: str | None = None, date: str | None = None) -> list[dict[str, Any]]:
     """List orders, newest first.
 
@@ -170,6 +197,7 @@ def list_orders(status: str | None = None, date: str | None = None) -> list[dict
 
 
 @mcp.tool()
+@surfaced
 def get_order(order_id: int) -> dict[str, Any]:
     """Fetch one order by its numeric id."""
     if order_id <= 0:
@@ -184,6 +212,7 @@ VALID_STATUSES = (
 
 
 @mcp.tool()
+@surfaced
 def update_order_status(order_id: int, status: str) -> dict[str, Any]:
     """Change one order's status.
 
