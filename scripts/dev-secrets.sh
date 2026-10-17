@@ -17,6 +17,7 @@ set -euo pipefail
 NAMESPACE="${1:-store}"
 DB_SECRET="store-db"
 ADMIN_SECRET="store-admin"
+WOO_SECRET="woo-api"
 
 rand() {
   # 32 chars, alphanumeric only. WordPress and MariaDB both cope with these
@@ -51,9 +52,25 @@ else
   echo "OK    secret/$ADMIN_SECRET created"
 fi
 
+# WooCommerce REST API pair for the Woo MCP server. See D-006.
+#
+# Format matches what WooCommerce itself generates in class-wc-ajax.php:
+#   'ck_' . wc_rand_hash()   where wc_rand_hash() is bin2hex(random_bytes(20))
+# so 'ck_' + 40 hex = 43 chars, which is exactly the char(43) column width.
+# Generating it here means the bootstrap Job only has to INSERT it, and no pod
+# needs permission to write a Kubernetes Secret.
+if kubectl -n "$NAMESPACE" get secret "$WOO_SECRET" >/dev/null 2>&1; then
+  echo "SKIP  secret/$WOO_SECRET already exists"
+else
+  kubectl -n "$NAMESPACE" create secret generic "$WOO_SECRET" \
+    --from-literal=consumer-key="ck_$(openssl rand -hex 20)" \
+    --from-literal=consumer-secret="cs_$(openssl rand -hex 20)"
+  echo "OK    secret/$WOO_SECRET created"
+fi
+
 echo
 echo "Secrets in $NAMESPACE (key names only, never values):"
-for s in "$DB_SECRET" "$ADMIN_SECRET"; do
+for s in "$DB_SECRET" "$ADMIN_SECRET" "$WOO_SECRET"; do
   keys="$(kubectl -n "$NAMESPACE" get secret "$s" \
     -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null || true)"
   printf '  %-14s %s\n' "$s" "$keys"

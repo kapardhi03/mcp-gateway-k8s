@@ -71,6 +71,22 @@ spec:
               value: {{ .Values.bootstrap.sampleProduct.price | quote }}
             - name: PRODUCT_SKU
               value: {{ .Values.bootstrap.sampleProduct.sku | quote }}
+            {{- if .Values.wooApi.enabled }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wooApi.existingSecret }}
+                  key: {{ .Values.wooApi.secretKeys.consumerKey }}
+            - name: WOO_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wooApi.existingSecret }}
+                  key: {{ .Values.wooApi.secretKeys.consumerSecret }}
+            - name: WOO_KEY_DESCRIPTION
+              value: {{ .Values.wooApi.description | quote }}
+            - name: WOO_KEY_PERMISSIONS
+              value: {{ .Values.wooApi.permissions | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}
           volumeMounts:
@@ -198,6 +214,65 @@ spec:
                 $WP post meta update "$PID" _virtual no
                 $WP wc product_cat 2>/dev/null >/dev/null || true
                 echo "created product $PID"
+              fi
+
+              # --- WooCommerce REST API key for the Woo MCP server (guarded) ---
+              # The pair is generated outside the cluster by dev-secrets.sh and
+              # arrives as env from a Secret. This step only INSERTS it, mirroring
+              # WooCommerce's own code in class-wc-ajax.php: the consumer_key is
+              # stored as wc_api_hash(), which is hash_hmac('sha256', $key, 'wc-api')
+              # and therefore deterministic, and the secret is stored in clear
+              # because WooCommerce compares it with hash_equals(). See D-006.
+              if [ -n "${WOO_CONSUMER_KEY:-}" ]; then
+                cat > /tmp/woo-api-key.php <<'PHPEOF'
+              <?php
+              global $wpdb;
+              $key    = getenv('WOO_CONSUMER_KEY');
+              $secret = getenv('WOO_CONSUMER_SECRET');
+              $login  = getenv('ADMIN_USER');
+              $desc   = getenv('WOO_KEY_DESCRIPTION');
+              $perms  = getenv('WOO_KEY_PERMISSIONS');
+
+              if ( ! function_exists('wc_api_hash') ) {
+                  fwrite(STDERR, "woocommerce not loaded\n"); exit(1);
+              }
+
+              $table = $wpdb->prefix . 'woocommerce_api_keys';
+              $hash  = wc_api_hash($key);
+
+              $existing = $wpdb->get_var(
+                  $wpdb->prepare("SELECT key_id FROM $table WHERE consumer_key = %s", $hash)
+              );
+              if ( $existing ) {
+                  echo "SKIP  woo api key already present (key_id $existing)\n";
+                  exit(0);
+              }
+
+              $user = get_user_by('login', $login);
+              if ( ! $user ) { fwrite(STDERR, "no such user: $login\n"); exit(1); }
+
+              $wpdb->insert(
+                  $table,
+                  array(
+                      'user_id'         => $user->ID,
+                      'description'     => $desc,
+                      'permissions'     => $perms,
+                      'consumer_key'    => $hash,
+                      'consumer_secret' => $secret,
+                      'truncated_key'   => substr($key, -7),
+                  ),
+                  array('%d','%s','%s','%s','%s','%s')
+              );
+
+              if ( ! $wpdb->insert_id ) {
+                  fwrite(STDERR, "insert failed: " . $wpdb->last_error . "\n"); exit(1);
+              }
+              echo "RUN   created woo api key (key_id " . $wpdb->insert_id . ", permissions $perms)\n";
+              PHPEOF
+                $WP eval-file /tmp/woo-api-key.php
+                rm -f /tmp/woo-api-key.php
+              else
+                echo "SKIP  no woo api credentials in env"
               fi
 
               echo "== bootstrap complete =="

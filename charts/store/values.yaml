@@ -119,6 +119,22 @@ wordpress:
       email: email
   siteTitle: "Demo Store"
 
+# WooCommerce REST API credentials for the Woo MCP server. See D-006, D-019.
+#
+# The pair is generated OUTSIDE the cluster by scripts/dev-secrets.sh and put
+# in a Secret. The bootstrap Job inserts it into WooCommerce. No pod ever
+# writes a Kubernetes Secret, and the raw pair never reaches a values file.
+wooApi:
+  enabled: true
+  # Name of an existing Secret holding keys: consumer-key, consumer-secret.
+  existingSecret: woo-api
+  secretKeys:
+    consumerKey: consumer-key
+    consumerSecret: consumer-secret
+  description: "woo-mcp"
+  # read_write: the Woo MCP server must create products and update orders.
+  permissions: read_write
+
 bootstrap:
   enabled: true
   image:
