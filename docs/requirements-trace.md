@@ -107,6 +107,26 @@ Same chart as local, values-only differences. Prod host `store.34.93.101.10.ssli
 
 K-02 is marked `pass` only if SP-1 to SP-4 all pass.
 
+**Prod storefront checkout, 2026-10-17.** Not in the pre-registered table above. The expectation
+came from the morning instruction ("I check out in the browser myself, you verify the order with
+WP-CLI") rather than being written into this file before running, so it is recorded here as a
+note rather than as an SP row. Kapardhi checked out at http://store.34.93.101.10.sslip.io/ with
+Cash on delivery. Verified on pod `store-store-wp-fd6dc7997-gzvkt`:
+
+| Field | Value |
+|---|---|
+| order | 13 |
+| status | `processing` |
+| total | 19.99 USD |
+| payment method | `cod` (Cash on delivery) |
+| created | 2026-10-17T02:22:46+00:00 |
+| line item | `Demo Widget` x1, sku `DEMO-WIDGET-1`, subtotal 19.99 |
+| WooCommerce | 11.2.1 |
+
+Order 13, not 12, because prod is a separate database from local. The serving image has no `wp`
+binary, so this used the same WP-CLI-equivalent PHP through `wp-load.php` as DOD-02, with
+`wc_get_orders()`, which is storage-agnostic across HPOS and legacy post storage.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |

@@ -138,3 +138,45 @@ k3d pulled `docker.io/rancher/k3s:v1.35.5-k3s1`. Pin that tag on the VPS so both
 **AI error caught (2026-10-16, GCP planning).** C-code proposed the first VM create command with `--no-address`, arguing it removed the public SSH attack surface entirely. It flagged only the egress consequence, that the VM could not reach the internet to install k3s without Cloud NAT. It missed the larger problem: the VPS must accept **public inbound HTTP** for Ingress, which is requirement K-06 and the whole point of the prod deployment. A VM with no external IP would have made the prod store unreachable. Caught by Kapardhi before anything was created. The corrected plan reserves a static external IP so the prod hostname can be `store.<IP>.sslip.io` and stays stable, while SSH still goes only through IAP TCP forwarding from `35.235.240.0/20` with no public SSH port.
 
 **Next.** GCP VM for the VPS half of K-02. Then the Woo MCP server, which needs D-006 and D-001.
+
+---
+
+## 2026-10-17, session 4: store on the VPS, K-02 pass
+
+**Goal.** Deploy the store chart to the k3s VPS with values-only differences, and prove it.
+
+**Proposed.**
+- K: reopen the IAP tunnel, open 80 and 443 to tag `k3s-prod` only, fresh prod secrets, prod host on sslip.io, pre-register the checks, then stop for a browser checkout.
+- C-code: the firewall rule text, the D-004 addendum wording, the pre-registration, and the checks.
+
+**Decided.** No new D-number. The prod host is recorded as a D-004 addendum: prod uses
+`store.34.93.101.10.sslip.io` because there is no paid domain, local stays `*.localhost`.
+This is the option C that D-004 rejected for local, accepted for prod only, with the reason
+written down. It records a fact and does not change the D-004 choice.
+
+**Built.**
+- GCP firewall `allow-http-https`: `tcp:80,443` from `0.0.0.0/0` to target tag `k3s-prod`, priority 1000. No existing rule touched.
+- Fresh Secrets on the VPS from `scripts/dev-secrets.sh`. The `store` namespace did not exist, so both were created new. Nothing copied from local.
+- `charts/store/values-prod.yaml`: `ingress.host` set to the sslip.io name, replacing the `store.example.com` placeholder.
+
+**Verified.** SP-1 to SP-4 pre-registered before running, all pass. Detail in `docs/requirements-trace.md`.
+- SP-1 `scripts/check-charts.sh`: PASS portability, PASS prod leakage, exit 0.
+- SP-2 values diff: only the header comment, `ingress.host` and the prod-only resources blocks differ. `git diff HEAD` on `charts/store/templates/` empty. Saved at `docs/evidence/k02-values-diff.txt`.
+- SP-3 `helm install` on the VPS: db 1/1, wp 1/1, bootstrap Completed, both PVCs Bound 2Gi `local-path`, Job `Complete 1/1` in 2m55s.
+- SP-4 `curl -I` from the laptop over the public internet: `HTTP/1.1 200 OK`.
+- Port posture re-checked after the firewall change: 6443 returns nothing from the internet, TCP 22 not publicly reachable.
+- Prod checkout: order 13, `processing`, 19.99 USD, `cod`, `Demo Widget` x1 sku `DEMO-WIDGET-1`.
+
+K-02 marked `pass`.
+
+**AI errors caught.**
+- Process slip, by C-code. The prod checkout verification was run without its expected result being written into `docs/requirements-trace.md` first, which is the rule this project runs on. The expectation existed in Kapardhi's instruction, so the result is not in doubt, but it was not pre-registered. Recorded as a note under the smoke deploy section rather than promoted to an SP row, so the table keeps its meaning.
+- No incorrect technical claims found this session. State was re-read from the repo at the start rather than carried over from the previous session's context, which is what caught that the VPS is GCP and that charts and scripts already existed.
+
+**Open risk.** The storefront is now publicly reachable, and the WordPress admin password was
+printed into a chat transcript while retrieving it for the browser login. Low consequence for a
+demo box, but it should be rotated before the repo goes public (D-018). Rotation needs a
+`wp user update admin --user_pass=...` on the pod plus a Secret update; deleting the Secret alone
+does not change the WordPress user.
+
+**Next.** The Woo MCP server, which needs D-006 and D-001. D-019 still needs Kapardhi's words.
