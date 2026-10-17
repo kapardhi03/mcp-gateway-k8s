@@ -121,3 +121,29 @@ async def test_proxy_handles_a_tool_with_no_parameters():
     mcp.add_tool(proxy.build_proxy_fn(name, empty, sink), name=name, description="p")
     r = await mcp.call_tool(name, {})
     assert r.content
+
+
+# --------------------------------------------- GW-5: useful failure reasons
+
+def test_reason_unwraps_exception_groups():
+    """REGRESSION, GW-5.
+
+    anyio wraps transport failures in an ExceptionGroup, so reporting the
+    outer type put the useless word "ExceptionGroup" in the Unreachable
+    status an operator reads. Observed live when woo-mcp was scaled to 0.
+    """
+    from gateway.upstreams import _reason
+
+    inner = ConnectionRefusedError("refused")
+    group = ExceptionGroup("transport failed", [inner])
+    assert _reason(group) == "ConnectionRefusedError"
+    assert _reason(inner) == "ConnectionRefusedError"
+    # nested groups still resolve
+    assert _reason(ExceptionGroup("outer", [group])) == "ConnectionRefusedError"
+
+
+def test_reason_never_returns_the_message():
+    """The text of a transport error can quote request headers."""
+    from gateway.upstreams import _reason
+
+    assert _reason(RuntimeError("Bearer SUPER-SECRET-TOKEN")) == "RuntimeError"

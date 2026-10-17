@@ -85,7 +85,7 @@ async def fetch_tools(u: Upstream, crypto: Crypto, timeout: float) -> UpstreamTo
         return UpstreamTools(u.slug, UNREACHABLE, [], "timed out after %.1fs" % timeout)
     except Exception as exc:
         # Type only. The text of a transport error can echo request headers.
-        return UpstreamTools(u.slug, UNREACHABLE, [], type(exc).__name__)
+        return UpstreamTools(u.slug, UNREACHABLE, [], _reason(exc))
 
 
 async def fetch_all(upstreams: list[Upstream], crypto: Crypto,
@@ -109,8 +109,24 @@ async def call_tool(u: Upstream, crypto: Crypto, timeout: float,
             "upstream %r did not respond within %.1fs" % (u.slug, timeout)) from exc
     except Exception as exc:
         raise UpstreamError(
-            "upstream %r failed: %s" % (u.slug, type(exc).__name__)) from exc
+            "upstream %r failed: %s" % (u.slug, _reason(exc))) from exc
 
 
 class UpstreamError(RuntimeError):
     """A call to an upstream failed. Message is safe to show a model."""
+
+
+def _reason(exc: BaseException, depth: int = 0) -> str:
+    """The most specific exception TYPE name, never the message.
+
+    anyio raises an ExceptionGroup around transport failures, so reporting
+    type(exc).__name__ alone put the useless string "ExceptionGroup" in the
+    Unreachable status an operator reads. Unwrap to the first real cause.
+
+    Still type-only: a transport error's TEXT can quote the request, headers
+    included, which is exactly where an upstream credential would surface.
+    """
+    inner = getattr(exc, "exceptions", None)
+    if inner and depth < 4:
+        return _reason(inner[0], depth + 1)
+    return type(exc).__name__

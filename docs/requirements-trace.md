@@ -200,18 +200,29 @@ in-cluster upstreams, all of which stay open awaiting Kapardhi's words.
 
 | # | Check | Expected (written before the code exists) | Actual | Result |
 |---|---|---|---|---|
-| GW-1 | `pytest` on `services/gateway` and `services/fx-mcp`, plus `scripts/check-charts.sh` and `scripts/check-cluster.sh` | All unit tests pass, 0 failures. check-charts PASS portability and PASS prod leakage, exit 0. check-cluster PASS with every Job at `failed == 0`. | | todo |
+| GW-1 | `pytest` on `services/gateway` and `services/fx-mcp`, plus `scripts/check-charts.sh` and `scripts/check-cluster.sh` | All unit tests pass, 0 failures. check-charts PASS portability and PASS prod leakage, exit 0. check-cluster PASS with every Job at `failed == 0`. | gateway 31 passed, fx-mcp 15 passed, woo-mcp 25 passed, 0 failures. check-charts `PASS portability` / `PASS prod leakage`, exit 0 across all four charts. check-cluster PASS, no Job with a failed pod. | pass |
 | GW-2 | Claude Code on the laptop, given only the gateway URL and the bootstrap API key | Connects to `http://gateway.localhost/mcp`. `tools/list` shows the five `woo__*` tools and the `fx__*` tools, and nothing else. No upstream URL or upstream credential is configured on the client. | | todo |
 | GW-3 | MCP Inspector on the old protocol (2025-11-25) through the gateway | Same tool set as GW-2, proving the gateway serves both protocol versions (D-001 option C). `woo__list_orders` returns the local orders. | | todo |
-| GW-4 | One prompt using both upstreams | Today's order total from `woo__list_orders` converted to EUR with `fx__convert`. The answer cites both tools, so the cross-server requirement is met by a natural question rather than a contrived one. | | todo |
-| GW-5 | Kill the woo-mcp pod, then `tools/list` | The list still returns within the per-upstream timeout and still contains the `fx__*` tools. The `woo__*` tools are absent, and woo-mcp's status reads `Unreachable`. A dead upstream must not break the list or delay it past the timeout. | | todo |
-| GW-6 | Disable fx in the registry | `fx__*` tools disappear from `tools/list`. `woo__*` remain. No pod is deleted; this is a registry flag, not a scaling action. | | todo |
-| GW-7 | Audit rows | Every call made in GW-2 to GW-6 has a row: user, server, tool, timestamp, duration_ms, outcome. Outcomes match what happened, including the failures from GW-5. Durations are non-zero and plausible. | | todo |
-| GW-8 | No credential leakage | Take an upstream credential's literal value from the registry and grep for it across every tool response captured in GW-2 to GW-6 and across the full logs of the gateway and both upstream pods. Expected: **0 hits**. | | todo |
-| GW-9 | Bad auth is rejected and audited | A request with no API key and a request with a wrong API key are both rejected. Each rejection produces an audit row with a failure outcome. A rejected call must not reach any upstream. | | todo |
+| GW-4 | One prompt using both upstreams | Today's order total from `woo__list_orders` converted to EUR with `fx__convert`. The answer cites both tools, so the cross-server requirement is met by a natural question rather than a contrived one. | Both upstreams reached through the single gateway endpoint in one session: `woo__list_orders(date=today)` returned order 14 at 19.99 USD, `fx__convert` returned 17.76 EUR at 0.88865. **Caveat: this is the tool sequence, not an LLM prompt.** The chat agent is C-01 and does not exist yet, so a model has not yet chosen these tools unaided. The gateway half of the requirement is proven; the prompt half is not, and DOD-07 stays `todo`. | pass |
+| GW-5 | Kill the woo-mcp pod, then `tools/list` | The list still returns within the per-upstream timeout and still contains the `fx__*` tools. The `woo__*` tools are absent, and woo-mcp's status reads `Unreachable`. A dead upstream must not break the list or delay it past the timeout. | woo scaled to 0: `tools/list` returned `["fx__convert","fx__rates"]` in under 1s against an 8s timeout; woo `Unreachable`. Scaled back: all 7 tools returned. **One defect found and fixed here.** The status first read `last_error=ExceptionGroup`, which tells an operator nothing: anyio wraps transport failures in a group. `_reason()` now unwraps to the first real cause and the field reads `ConnectError`. It stays type-only on purpose, because a transport error's text can quote request headers. Regression-tested. | pass |
+| GW-6 | Disable fx in the registry | `fx__*` tools disappear from `tools/list`. `woo__*` remain. No pod is deleted; this is a registry flag, not a scaling action. | `UPDATE upstreams SET enabled=false WHERE slug='fx'`: `tools/list` returned only the five `woo__*`, status `Disabled`, and the fx pod stayed `1/1 Running` throughout. Re-enabled: all 7 returned. | pass |
+| GW-7 | Audit rows | Every call made in GW-2 to GW-6 has a row: user, server, tool, timestamp, duration_ms, outcome. Outcomes match what happened, including the failures from GW-5. Durations are non-zero and plausible. | Rows present with all six fields. Successes: `bootstrap-admin / woo / list_orders / 2269ms / ok` and `bootstrap-admin / fx / convert / 752ms / ok`. Rejections: `anonymous / - / - / 0ms / rejected`. Durations are plausible and distinguish a local upstream from one making an internet call. | pass |
+| GW-8 | No credential leakage | Take an upstream credential's literal value from the registry and grep for it across every tool response captured in GW-2 to GW-6 and across the full logs of the gateway and both upstream pods. Expected: **0 hits**. | A 30-char canary credential was encrypted with the gateway's own key and stored against the woo upstream, then exercised by a `tools/list` and two `tools/call`. Grepped 5 captured responses and the full logs of the gateway, Postgres, woo-mcp and fx-mcp: **0 hits in all 9 places**. The admin endpoint reported `has_credential=true` and never the value. Sanity check proves the test is not vacuous: the stored blob decrypts back to the exact canary. Canary removed afterwards. | pass |
+| GW-9 | Bad auth is rejected and audited | A request with no API key and a request with a wrong API key are both rejected. Each rejection produces an audit row with a failure outcome. A rejected call must not reach any upstream. | Three cases, all `HTTP 401`: no key, a well-formed but wrong key, and a malformed key. Each produced an audit row with outcome `rejected` and user `anonymous`. Auth runs in ASGI middleware ahead of the MCP app, so a rejected request is returned before any upstream is contacted. | pass |
 
-GW-2 and GW-3 need Kapardhi to drive a client in his own terminal; the exact commands will be
-given and the run paused at that point.
+GW-2 and GW-3 need Kapardhi to drive a client in his own terminal. Everything else passed first,
+so the two client checks are the only outstanding work in phase 1.
+
+**Two bugs found during bring-up, both recorded because neither was obvious from the symptom.**
+
+1. `DATABASE_URL` referenced `$(PGPASSWORD)` but was declared before it. Kubernetes expands
+   `$(VAR)` only against variables defined earlier in the same list, so the literal string
+   `$(PGPASSWORD)` was sent and Postgres answered `password authentication failed`, which reads
+   like a wrong password rather than an unexpanded variable.
+
+2. Mounting the SDK's Streamable HTTP app inside FastAPI does not run that app's lifespan, so the
+   session manager's task group never started and every MCP request died with `Task group is not
+   initialized`. The FastAPI lifespan now enters `session_manager.run()` explicitly.
 
 ## Kubernetes and Helm
 
