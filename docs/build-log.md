@@ -180,3 +180,53 @@ demo box, but it should be rotated before the repo goes public (D-018). Rotation
 does not change the WordPress user.
 
 **Next.** The Woo MCP server, which needs D-006 and D-001. D-019 still needs Kapardhi's words.
+
+---
+
+## 2026-10-17, session 5: Woo MCP server, store timezone
+
+**Goal.** Build the WooCommerce MCP server and its chart, and prove them against
+pre-registered checks.
+
+**Proposed.**
+- K: D-020 GHCR multi-arch; pre-generate the Woo API pair outside the cluster; woo-mcp with five
+  tools; a chart with a NetworkPolicy and no Ingress; pre-register all eight checks first.
+- C-code: the GHCR limit research, the WooCommerce source reading, the implementation and the checks.
+
+**Decided.** D-020, GHCR multi-arch, private until submission. D-001 and D-006 stay open; both now
+record that the build proceeds on the recommendation, pending Kapardhi's words.
+
+**Built.** `scripts/rotate-admin.sh`; the WooCommerce REST credential path; `services/woo-mcp`;
+`charts/woo-mcp`; store timezone set to Asia/Kolkata.
+
+**Verified.** WM-1 to WM-8 all pass on k3d. Detail in `docs/requirements-trace.md`.
+
+**AI errors caught.**
+- **Planning chat wrongly stated order 12 was placed "today".** WM-4 as briefed was
+  "list_orders(date=today) returns local order 12". Order 12 was created 2026-10-16T15:37:15Z and
+  the check ran on 2026-10-17, so as written it could only fail. Caught by C-code at
+  pre-registration, before any code existed, by reading the order's real timestamp rather than
+  trusting the brief. Rewritten to place a fresh order and keep order 12 as a negative control,
+  which made the check stronger: it now proves the date filter both selects and excludes.
+- **WM-8 found a real defect.** The MCP SDK surfaces a message to the model only when a tool raises
+  its own `ToolError`; anything else is a crash with the text withheld. `WooError` was a plain
+  `RuntimeError`, so with WordPress at 0 replicas the client saw only "Error executing tool
+  list_products". Fixed with a `@surfaced` decorator at the MCP boundary, regression-tested across
+  all five tools.
+- **WM-6's predicted failure shape was wrong.** C-code expected a denied connection to time out.
+  k3s's NetworkPolicy backend sends a TCP reset, so it is refused. Isolation is genuinely enforced
+  and was proved with controls, including direct to the pod IP. The prediction was wrong and is
+  recorded as such rather than quietly rewritten.
+- **Latent SIGPIPE bug in `scripts/dev-secrets.sh`.** `tr ... | head -c 32` dies under
+  `set -o pipefail` once head closes the pipe. A race, so it passed for two sessions before failing
+  during the first run of `rotate-admin.sh`. Fixed in both scripts and proved over 10 runs.
+- **`scripts/check-charts.sh` false positive.** Its leakage regex `\.local[^a-zA-Z0-9]` matches a
+  legitimate `svc.cluster.local` FQDN. Worked around in the woo-mcp chart with the
+  namespace-qualified short Service name, which is correct DNS anyway. The regex remains a trap for
+  a future chart that genuinely needs an FQDN.
+
+**Security note.** The prod WordPress admin password was printed into a chat transcript while being
+retrieved for a browser login. Rotated with `scripts/rotate-admin.sh`; the exposed value now returns
+`incorrect_password`.
+
+**Next.** GHCR push and the VPS half of woo-mcp, then gateway phase 1.
