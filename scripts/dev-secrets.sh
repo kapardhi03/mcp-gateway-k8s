@@ -21,7 +21,11 @@ ADMIN_SECRET="store-admin"
 rand() {
   # 32 chars, alphanumeric only. WordPress and MariaDB both cope with these
   # without quoting surprises in the bootstrap Job's shell.
-  LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32
+  #
+  # Not `tr ... | head -c 32`: under `set -o pipefail` that dies with SIGPIPE
+  # once head exits at 32 bytes and tr writes to the closed pipe. It is a race,
+  # so it passed for two sessions before failing. cut consumes the whole stream.
+  head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-32
 }
 
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then

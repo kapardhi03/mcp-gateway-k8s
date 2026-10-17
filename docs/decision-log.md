@@ -28,6 +28,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-017 | Local toolchain (Colima 0.10.3, Helm 4.x) | Day 1, all charts | decided |
 | D-018 | Repo visibility before submission | Submission | decided |
 | D-019 | How dev and prod secrets reach the chart | Store chart, all charts | open, needs Kapardhi's words |
+| D-020 | Image registry and build (GHCR, multi-arch) | All images | decided |
 
 ---
 
@@ -59,6 +60,13 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 **"Why not X?" asked and answer:**
 **What would change my mind:**
 **Status:** open, needs spike
+
+**Build proceeds on the recommendation (2026-10-17).** The Woo MCP server is being built as
+option C, accepting both protocol versions, on Claude's recommendation and with the spike
+measurements in `docs/requirements-trace.md` behind it. This entry stays **open**: it is not
+decided until Kapardhi gives his choice and his reason in his own words. The build is reversible,
+because the spike showed one SDK 2.3.0 server serving both versions at once with no special
+handling, so option A or B would be a narrowing, not a rewrite.
 
 ---
 
@@ -226,6 +234,50 @@ The requirements say this must be documented with a reason.
 **"Why not X?" asked and answer:**
 **What would change my mind:**
 **Status:** open
+
+**Build proceeds on the recommendation (2026-10-17).** The Woo MCP server is being built as
+option A, the WooCommerce REST API. This entry stays **open** until Kapardhi gives his words.
+
+**Verified against WooCommerce 11.2.1 source, not documentation (2026-10-17).** Read from the
+running pod at `wp-content/plugins/woocommerce/includes/class-wc-rest-authentication.php`.
+
+1. **Auth over plain HTTP is OAuth 1.0a one-legged, not basic auth.** `authenticate()` lines
+   206-221 read:
+
+   ```php
+   if ( is_ssl() ) {
+       $user_id = $this->perform_basic_authentication();
+   }
+   if ( $user_id ) { return $user_id; }
+   return $this->perform_oauth_authentication();
+   ```
+
+   Basic auth is attempted only under TLS. The cluster-internal Service is plain HTTP, so
+   woo-mcp must sign with OAuth 1.0a. Kapardhi's prior was correct.
+
+2. **The signature base string uses the store's home URL, not the Host header.** Line 581:
+
+   ```php
+   $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 'https' : 'http' ) );
+   ```
+
+   This is the trap. woo-mcp will connect to `http://<service>.<ns>.svc.cluster.local/...`
+   but the server builds its base string from `get_home_url()`, which is
+   `http://store.localhost` locally and `http://store.34.93.101.10.sslip.io` on the VPS.
+   The client must sign the home URL while connecting to the Service address, or every
+   signature fails. Two different values, one request.
+
+3. **Consumer keys are stored hashed, secrets in clear.** `wc_api_hash()` in
+   `wc-core-functions.php:1311` is `hash_hmac( 'sha256', $data, 'wc-api' )`: a fixed key,
+   no salt, fully deterministic. `get_user_data_by_consumer_key()` line 733 hashes the
+   incoming key and looks it up in `woocommerce_api_keys.consumer_key`. The secret is stored
+   as-is and compared with `hash_equals()` at line 386. Because the hash is deterministic,
+   a key/secret pair can be generated outside WordPress and inserted directly, which is what
+   lets `dev-secrets.sh` pre-generate it with no pod ever writing a Kubernetes Secret.
+
+4. **Signature algorithm.** Line 603: `base64_encode( hash_hmac( $algo, $string_to_sign, $secret, true ) )`,
+   where `$algo` comes from `oauth_signature_method` with the `HMAC-` prefix stripped, so
+   `HMAC-SHA256` is supported.
 
 ---
 
@@ -577,3 +629,54 @@ simply running.
 **What would change my mind:** _TODO Kapardhi_
 
 **Status:** open, needs Kapardhi's words
+
+---
+
+## D-020: Image registry and build
+
+**Why this matters.** Local k3d and the k3s VPS are different CPU architectures. Local runs
+arm64 under Colima on an M1; the VPS is `x86_64` (`e2-standard-2`). One image has to work on
+both, and a reviewer must be able to `helm install` without building anything.
+
+**Decision (AI-drafted, accepted by Kapardhi).** GHCR (`ghcr.io/kapardhi03/...`), multi-arch
+`linux/arm64` + `linux/amd64` built with `docker buildx`. The package stays **private** until
+submission day, then goes public with the repo (D-018) so a reviewer can pull without
+building. Prod pulls with an `imagePullSecret` created by `scripts/dev-secrets.sh`, never
+committed.
+
+**GHCR free-plan limits, verified 2026-10-17 before adopting.**
+
+| | GitHub Free, private packages |
+|---|---|
+| Storage | 500 MB, **shared with Actions artifacts** |
+| Data transfer out | 1 GB per month |
+| Public packages | free and unmetered |
+| Over quota, no payment method | usage is blocked |
+| Over quota, payment method on file | billed, $0.25/GB storage, $0.50/GB transfer |
+
+Source: https://docs.github.com/en/billing/concepts/product-billing/github-packages
+("GitHub Packages usage is free for public packages"; Free tier row "500MB | 1GB").
+
+**Do the limits fit? Yes, with one rule.** A multi-arch Python image is roughly 90-110 MB
+compressed per architecture, so about 200 MB per pushed tag. 500 MB is therefore only two or
+three retained tags, and GHCR keeps every version until it is explicitly deleted. That would
+be tight if every build were pushed.
+
+The rule that makes it fit: **local k3d never uses the registry.** `k3d image import` loads a
+locally built image straight into the cluster, so the whole local phase, which is where all
+the pre-registered checks run, costs zero GHCR storage and zero transfer. GHCR is used only
+for VPS deploys, which are a handful of pushes and pulls. Old versions get pruned.
+
+Transfer is not a concern: the VPS pulls amd64 only, about 100 MB, so 1 GB/month allows
+roughly ten pulls.
+
+**Cost risk.** None expected, and the failure mode is safe: with no payment method on the
+account, exceeding quota blocks rather than bills. That is a demo risk, not a money risk.
+Per the cloud cost rule in `CLAUDE.md`, nothing billable is created without Kapardhi's OK.
+
+**Prerequisite not yet met.** The `gh` token on this machine has scopes
+`admin:public_key, delete_repo, gist, read:org, repo`. Pushing to GHCR needs `write:packages`,
+pulling needs `read:packages`, and pruning old versions needs `delete:packages`. This blocks
+the VPS step only, not local work.
+
+**Status:** decided
