@@ -230,3 +230,63 @@ retrieved for a browser login. Rotated with `scripts/rotate-admin.sh`; the expos
 `incorrect_password`.
 
 **Next.** GHCR push and the VPS half of woo-mcp, then gateway phase 1.
+
+---
+
+## 2026-10-17, session 6: GHCR, VPS, gateway phase 1
+
+**Goal.** Push woo-mcp to GHCR and deploy it on the VPS, set the store timezone, then build
+gateway phase 1 and pass GW-1 to GW-9.
+
+**Proposed.**
+- K: GHCR multi-arch push, VPS deploy with VWM re-checks, a permanent Job guard, then gateway
+  phase 1 with Postgres, fx-mcp and nine pre-registered checks.
+- C-code: the verifications, the implementation, the checks.
+
+**Decided.** D-009 and D-010 both stay open but now carry verified facts. D-020 unchanged.
+
+**Verified.** VWM-2/4/6/8 pass on the VPS. GW-1 to GW-9 all pass locally. Detail in
+`docs/requirements-trace.md`.
+
+**Built.** `scripts/check-cluster.sh`; store timezone Asia/Kolkata; `services/fx-mcp` and its
+chart; `services/gateway` and its chart with a Postgres StatefulSet.
+
+**AI errors caught.**
+- **`wp option update gmt_offset 0` killed the bootstrap Job, invisibly.** It exits non-zero when
+  the value is unchanged, and under `set -eu` that failed the Job. The Job still reported
+  `Complete` because `backoffLimit` retried it and the retry took the SKIP branch. Both clusters
+  showed `Complete 1/1` with an `Error` pod sitting next to a `Completed` one. Writing gmt_offset
+  was also simply wrong: WordPress derives it. This produced the permanent guard,
+  `scripts/check-cluster.sh`, which fails any Job with `status.failed > 0`.
+- **The first guard fixture proved the wrong thing.** It used `/tmp`, which is fresh per pod, so
+  the Job failed all four attempts and never reached `Complete`. That demonstrated the guard
+  catching an outright failure, not the retry-masked case it exists for. Redone with a hostPath
+  marker so the first pod fails and the second succeeds.
+- **`DATABASE_URL` referenced `$(PGPASSWORD)` declared after it.** Kubernetes expands `$(VAR)`
+  only against earlier entries, so the literal string was sent and Postgres replied `password
+  authentication failed`, which reads like a wrong password.
+- **Mounting the SDK's Streamable HTTP app in FastAPI does not run its lifespan.** The session
+  manager's task group never started and every MCP request died with `Task group is not
+  initialized`.
+- **`last_error` read `ExceptionGroup`.** anyio wraps transport failures, so the status an
+  operator reads said nothing. `_reason()` now unwraps to the first real cause and it reads
+  `ConnectError`. Still type-only: a transport error's text can quote request headers.
+- **C-code wrongly accused the gateway of flattening upstream schemas.** The Inspector showed a
+  schema with no descriptions and no enum, and C-code reported the gateway as lossy. Checking
+  rather than assuming showed the gateway's schema is byte-identical to woo-mcp's: the gateway is
+  a faithful proxy and woo-mcp is the lossy end. The claim was corrected before any change was
+  made to the gateway.
+- **A dependency version was stated from memory and was wrong.** `psycopg[binary]==3.2.12` does
+  not exist for python 3.15. Versions are now queried from the index before pinning.
+
+**Nearly an error, avoided.** GHCR showed 5 package versions, 1 tagged and 4 untagged, and the
+obvious move was to prune the untagged ones. All four turned out to be referenced by the tagged
+manifest list, two as arch manifests and two as attestations. Pruning would have broken the image.
+Checked digest by digest first; nothing was deleted.
+
+**Security note.** The gateway bootstrap API key was printed into a chat transcript while being
+retrieved for the GW-2 and GW-3 runs. It reaches only `gateway.localhost`, so the practical
+exposure is nil today, but it must be rotated before the gateway gets a public Ingress on the VPS.
+
+**Next.** Rotate the bootstrap key, then the dashboard and chat agent (C-01 to C-04), which are
+what DOD-03 and DOD-04 still need. The gateway's VPS deploy also remains.

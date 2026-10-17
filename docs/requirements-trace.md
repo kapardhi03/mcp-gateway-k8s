@@ -201,9 +201,9 @@ in-cluster upstreams, all of which stay open awaiting Kapardhi's words.
 | # | Check | Expected (written before the code exists) | Actual | Result |
 |---|---|---|---|---|
 | GW-1 | `pytest` on `services/gateway` and `services/fx-mcp`, plus `scripts/check-charts.sh` and `scripts/check-cluster.sh` | All unit tests pass, 0 failures. check-charts PASS portability and PASS prod leakage, exit 0. check-cluster PASS with every Job at `failed == 0`. | gateway 31 passed, fx-mcp 15 passed, woo-mcp 25 passed, 0 failures. check-charts `PASS portability` / `PASS prod leakage`, exit 0 across all four charts. check-cluster PASS, no Job with a failed pod. | pass |
-| GW-2 | Claude Code on the laptop, given only the gateway URL and the bootstrap API key | Connects to `http://gateway.localhost/mcp`. `tools/list` shows the five `woo__*` tools and the `fx__*` tools, and nothing else. No upstream URL or upstream credential is configured on the client. | | todo |
-| GW-3 | MCP Inspector on the old protocol (2025-11-25) through the gateway | Same tool set as GW-2, proving the gateway serves both protocol versions (D-001 option C). `woo__list_orders` returns the local orders. | | todo |
-| GW-4 | One prompt using both upstreams | Today's order total from `woo__list_orders` converted to EUR with `fx__convert`. The answer cites both tools, so the cross-server requirement is met by a natural question rather than a contrived one. | Both upstreams reached through the single gateway endpoint in one session: `woo__list_orders(date=today)` returned order 14 at 19.99 USD, `fx__convert` returned 17.76 EUR at 0.88865. **Caveat: this is the tool sequence, not an LLM prompt.** The chat agent is C-01 and does not exist yet, so a model has not yet chosen these tools unaided. The gateway half of the requirement is proven; the prompt half is not, and DOD-07 stays `todo`. | pass |
+| GW-2 | Claude Code on the laptop, given only the gateway URL and the bootstrap API key | Connects to `http://gateway.localhost/mcp`. `tools/list` shows the five `woo__*` tools and the `fx__*` tools, and nothing else. No upstream URL or upstream credential is configured on the client. | Kapardhi ran it. Claude Code connected with only the gateway URL and the bootstrap key, no upstream URL or credential anywhere in its config. Asked "What orders came in today?" it returned order 14, 19.99 USD, `cod`, Demo Widget, dated 2026-10-17 08:35:39 **store time**, and confirmed the store-timezone bounds excluded yesterday's order 12. | pass |
+| GW-3 | MCP Inspector on the old protocol (2025-11-25) through the gateway | Same tool set as GW-2, proving the gateway serves both protocol versions (D-001 option C). `woo__list_orders` returns the local orders. | `count: 7`, exactly the same names as GW-2. `tools/call woo__list_orders date=today` returned order 14 with `isError: false`. The gateway logged `Created new transport with session ID`, so the Inspector used the session-based 2025-11-25 path while Claude Code used the stateless 2026-07-28 one. **The pair is what proves D-001 option C: one gateway served both versions concurrently with no special handling.** | pass |
+| GW-4 | One prompt using both upstreams | Today's order total from `woo__list_orders` converted to EUR with `fx__convert`. The answer cites both tools, so the cross-server requirement is met by a natural question rather than a contrived one. | **Fully met, including the prompt half.** First proven as a tool sequence, then properly during GW-2: Kapardhi asked Claude Code one natural-language question, "What's today's order total in EUR?", and it answered EUR 17.76 from order 14 at 19.99 USD, choosing `woo__list_orders` and `fx__convert` unaided through the single gateway endpoint. A model picking two tools from two different upstreams is exactly what the requirement asks for. Note this was Claude Code as the external client, not the dashboard chat agent (C-01), which still does not exist; DOD-07 is about the external client and is now evidenced. | pass |
 | GW-5 | Kill the woo-mcp pod, then `tools/list` | The list still returns within the per-upstream timeout and still contains the `fx__*` tools. The `woo__*` tools are absent, and woo-mcp's status reads `Unreachable`. A dead upstream must not break the list or delay it past the timeout. | woo scaled to 0: `tools/list` returned `["fx__convert","fx__rates"]` in under 1s against an 8s timeout; woo `Unreachable`. Scaled back: all 7 tools returned. **One defect found and fixed here.** The status first read `last_error=ExceptionGroup`, which tells an operator nothing: anyio wraps transport failures in a group. `_reason()` now unwraps to the first real cause and the field reads `ConnectError`. It stays type-only on purpose, because a transport error's text can quote request headers. Regression-tested. | pass |
 | GW-6 | Disable fx in the registry | `fx__*` tools disappear from `tools/list`. `woo__*` remain. No pod is deleted; this is a registry flag, not a scaling action. | `UPDATE upstreams SET enabled=false WHERE slug='fx'`: `tools/list` returned only the five `woo__*`, status `Disabled`, and the fx pod stayed `1/1 Running` throughout. Re-enabled: all 7 returned. | pass |
 | GW-7 | Audit rows | Every call made in GW-2 to GW-6 has a row: user, server, tool, timestamp, duration_ms, outcome. Outcomes match what happened, including the failures from GW-5. Durations are non-zero and plausible. | Rows present with all six fields. Successes: `bootstrap-admin / woo / list_orders / 2269ms / ok` and `bootstrap-admin / fx / convert / 752ms / ok`. Rejections: `anonymous / - / - / 0ms / rejected`. Durations are plausible and distinguish a local upstream from one making an internet call. | pass |
@@ -212,6 +212,37 @@ in-cluster upstreams, all of which stay open awaiting Kapardhi's words.
 
 GW-2 and GW-3 need Kapardhi to drive a client in his own terminal. Everything else passed first,
 so the two client checks are the only outstanding work in phase 1.
+
+**GW-3's first run failed, and the cause is worth recording.** The command was run with
+`Bearer $KEY` where `$KEY` was unset in that shell, so an empty bearer reached the gateway. The
+gateway correctly returned 401, but MCP Inspector responded by attempting OAuth Dynamic Client
+Registration and reported `auth_required: Dynamic Client Registration rejected (HTTP 401)`, which
+names OAuth and hides the real cause. Reproduced exactly: empty bearer gives 401, the real key
+gives a working session. **Contributing gap on our side:** the 401 carries no `WWW-Authenticate`
+header, so a client has nothing to tell it that a static bearer is expected and is free to guess
+OAuth. Adding that header would make the failure self-explaining. Not done yet, and it moves no
+pre-registered row, so it is recorded rather than built.
+
+**Three observations from the live clients, none of them gateway bugs.**
+
+1. *A list tool's result arrives as one content block per element, not a JSON array.* Claude Code
+   noticed this and checked it carefully before reporting a count: a one-element result is a single
+   bare object, which on its own does not distinguish "one order" from "a list flattened to its
+   first element". It confirmed by calling with no filter and getting two separate blocks. This is
+   how the SDK serialises a `list[dict]` return, not a defect in `list_orders`, but it is worth a
+   line in the demo script because a reader will wonder.
+
+2. *`fx__convert` reports `date: 2026-10-16` when asked for today's rate.* Frankfurter serves ECB
+   reference rates, which publish on business days, so "latest" is the most recent published rate
+   rather than one dated today. Correct behaviour for the data source, and worth stating out loud
+   rather than letting a reviewer catch it.
+
+3. *Tool schemas carry no parameter descriptions and no enum for `status`.* Checked rather than
+   assumed: the gateway's served schema is byte-identical to woo-mcp's own, so the gateway is a
+   faithful proxy and the flattening happens in woo-mcp, whose tools use plain `str` annotations.
+   The consequence is that a model learns the eight valid order statuses only by guessing and
+   being rejected. Using `Literal[...]` for `status` would put the enum in the schema. It moves no
+   pre-registered row, so it is flagged here rather than done.
 
 **Two bugs found during bring-up, both recorded because neither was obvious from the symptom.**
 
