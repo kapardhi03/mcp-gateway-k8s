@@ -36,6 +36,7 @@ Rules for Claude Code in this repo. Read `docs/decision-log.md` before changing 
 
 - Never hardcode `ingressClassName`, `storageClassName`, `traefik` or `local-path` in `templates/`. They come from values only. This keeps the charts portable to a reviewer's kind or EKS cluster. See D-002.
 - Run `scripts/check-charts.sh` before calling any chart done.
+- A Job is done only when `status.failed == 0`. `Complete` is not enough: a Job with a `backoffLimit` reports `Complete` as soon as one pod succeeds, however many died first, so a Job that only passed on retry looks identical to one that worked. Run `scripts/check-cluster.sh` against the cluster, and record `failed == 0` in every Job row in `docs/requirements-trace.md`, not just `Complete`.
 
 ## Cloud cost
 

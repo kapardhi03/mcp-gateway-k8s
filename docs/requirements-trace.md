@@ -5,6 +5,12 @@ Rule: write **Expected** before running the check. Fill **Actual** after. Status
 
 Status values: `todo`, `in progress`, `pass`, `fail`.
 
+**Rule for Job checks.** A Kubernetes Job row is `pass` only when `status.failed == 0`, verified
+with `scripts/check-cluster.sh`. `Complete` on its own is not evidence: a Job with a `backoffLimit`
+reports `Complete` as soon as one pod succeeds, no matter how many failed first. This caught a real
+bug on 2026-10-17, where the store bootstrap Job reported `Complete 1/1` while its first pod had
+died on `wp option update gmt_offset`.
+
 ## Definition of Done (the live demo)
 
 | ID | Check | Expected (write before running) | Actual | Evidence | Status |
