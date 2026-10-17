@@ -167,13 +167,24 @@ covered by the prod chart render, so they are not repeated.
 
 | # | Check | Expected (written before running) | Actual | Result |
 |---|---|---|---|---|
-| VWM-2 | `tools/list` from a gateway-labelled pod on the VPS | Exactly the same 5 tools as local: `create_product`, `get_order`, `list_orders`, `list_products`, `update_order_status`. | | todo |
-| VWM-4 | `list_orders(date=today)` on the VPS | The prod store has order 13, placed 2026-10-17T02:22:46Z, which is 07:52 on the 17th in Asia/Kolkata. With the store timezone set, `date=today` returns order 13. `date=2026-10-16` returns nothing, since prod has no orders from the 16th. | | todo |
-| VWM-6 | NetworkPolicy on k3s | Gateway-labelled pod connects. Unlabelled pod is blocked. On k3d the block showed as REFUSED rather than TIMEOUT; the same backend is in use here, so REFUSED is expected again. The check is that the unlabelled pod cannot connect while reaching WordPress fine. | | todo |
-| VWM-8 | Upstream failure on the VPS | Scale the prod WordPress deployment to 0, call a tool: an MCP tool error naming the unreachable store, within the 10s timeout, woo-mcp stays Ready with 0 restarts. Scale back to 1 and the same tool succeeds. | | todo |
+| VWM-2 | `tools/list` from a gateway-labelled pod on the VPS | Exactly the same 5 tools as local: `create_product`, `get_order`, `list_orders`, `list_products`, `update_order_status`. | `{"count": 5}` and the same five names. Identical to local. | pass |
+| VWM-4 | `list_orders(date=today)` on the VPS | The prod store has order 13, placed 2026-10-17T02:22:46Z, which is 07:52 on the 17th in Asia/Kolkata. With the store timezone set, `date=today` returns order 13. `date=2026-10-16` returns nothing, since prod has no orders from the 16th. | `date=today` returned `[13]`; `date=2026-10-16` returned none; no filter returned `[13]`. The API now renders the timestamp as `2026-10-17T07:52:46` rather than `02:22:46Z`, so the store timezone is visibly in effect through the REST layer. | pass |
+| VWM-6 | NetworkPolicy on k3s | Gateway-labelled pod connects. Unlabelled pod is blocked. On k3d the block showed as REFUSED rather than TIMEOUT; the same backend is in use here, so REFUSED is expected again. The check is that the unlabelled pod cannot connect while reaching WordPress fine. | Gateway pod: WordPress CONNECTED, woo-mcp CONNECTED. Unlabelled pod: WordPress CONNECTED, woo-mcp REFUSED. Same shape as k3d, prediction correct this time. | pass |
+| VWM-8 | Upstream failure on the VPS | Scale the prod WordPress deployment to 0, call a tool: an MCP tool error naming the unreachable store, within the 10s timeout, woo-mcp stays Ready with 0 restarts. Scale back to 1 and the same tool succeeds. | `"could not reach the store at http://store-store-wp.store (GET /wp-json/wc/v3/products): ConnectError"` in 3s against a 10s timeout. Pod Ready, 0 restarts. Scaled back to 1: the same tool returned Demo Widget with the prod permalink. 0 restarts across the outage. | pass |
 
 Image for prod is pulled from GHCR, not imported: `ghcr.io/kapardhi03/woo-mcp:0.1.1`, multi-arch
 `linux/arm64` + `linux/amd64`, 57.2 MB and 57.0 MB compressed respectively.
+
+Confirmed pulled, not imported: kubelet logged `Successfully pulled image
+"ghcr.io/kapardhi03/woo-mcp:0.1.1" in 9.878s. Image size: 59729890 bytes`.
+
+**GHCR storage, 2026-10-17.** Total 114.1 MB of the 500 MB free-plan allowance, 385.9 MB headroom.
+Actions artifacts, which share that allowance, are at 0. **Nothing was pruned, deliberately.** The
+package shows 5 versions, 1 tagged and 4 untagged, and the obvious move is to delete the untagged
+ones. That would have broken the image: all four are referenced by the tagged manifest list, two as
+the `linux/arm64` and `linux/amd64` manifests and two as attestation manifests. Verified by
+comparing each version's digest against the manifest list before touching anything. There is
+nothing safe to prune until a second tag exists.
 
 ## Kubernetes and Helm
 

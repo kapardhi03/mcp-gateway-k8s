@@ -186,17 +186,19 @@ spec:
               esac
 
               # --- store timezone (guarded) ---
-              # WordPress stores this as timezone_string. Setting it also
-              # clears gmt_offset, which WordPress treats as the alternative
-              # representation; leaving both set is what makes wp_timezone()
-              # ambiguous.
+              # Only timezone_string is set. WordPress derives gmt_offset from
+              # it, so writing gmt_offset here is both unnecessary and unsafe:
+              # `wp option update` exits non-zero when the value is unchanged,
+              # and under `set -eu` that killed the whole Job. The Job then
+              # only "passed" because backoffLimit retried it and the retry
+              # took the SKIP branch below. Observed on both clusters.
               TZ_NOW="$($WP option get timezone_string 2>/dev/null || true)"
               if [ "$TZ_NOW" = "$SITE_TIMEZONE" ]; then
                 echo "SKIP  timezone already $SITE_TIMEZONE"
               else
                 echo "RUN   set timezone $SITE_TIMEZONE (was: ${TZ_NOW:-unset})"
                 $WP option update timezone_string "$SITE_TIMEZONE"
-                $WP option update gmt_offset 0
+                echo "      gmt_offset is now $($WP option get gmt_offset 2>/dev/null || echo '?') (derived by WordPress)"
               fi
 
               # --- pretty permalinks (guarded) ---
