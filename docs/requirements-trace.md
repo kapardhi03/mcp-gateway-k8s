@@ -17,15 +17,31 @@ died on `wp option update gmt_offset`.
 |---|---|---|---|---|---|
 | DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | Kapardhi checked out in a browser at http://store.localhost/ on 2026-10-16 | Order 12 created, payment method `cod` (Cash on delivery), total 19.99 USD, line item `Demo Widget` x1 sku `DEMO-WIDGET-1` | `wc_get_orders()` via `kubectl exec` on the WordPress pod | pass |
 | DOD-02 | Order from DOD-01 visible in WooCommerce admin | WooCommerce 11.2.1 admin | Order 12 status `processing`, created 2026-10-16T15:37:15Z. Admin URL `http://store.localhost/wp-admin/admin.php?page=wc-orders&action=edit&id=12`. Orders list route returns 302 to `wp-login.php` when unauthenticated, which confirms the route exists and is protected. Orders use WooCommerce legacy post storage, not HPOS; `wc_get_orders()` is storage-agnostic and was used for this check. | WP-CLI-equivalent PHP via `kubectl exec`, output in `docs/build-log.md` | pass |
-| DOD-03 | User A, chat agent: create product with name and price, it appears on storefront | | | | todo |
-| DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | | | | todo |
-| DOD-05 | User B: external client connects with only gateway URL + B's key, sees tools of every enabled server | | | | todo |
-| DOD-06 | User B: same orders question succeeds | | | | todo |
-| DOD-07 | User B: one prompt uses tools from two different upstream servers | | | | todo |
-| DOD-08 | Revoke B's key, next call rejected | | | | todo |
-| DOD-09 | Disable one upstream, its tools disappear from chat agent and external client | | | | todo |
-| DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | | | | todo |
-| DOD-11 | Every call above in audit log, attributed to the right user | | | | todo |
+| DOD-03 | User A, chat agent: create product with name and price, it appears on storefront | Pre-registered 2026-10-18. User A, signed in to the dashboard in a browser, types one sentence asking for a product with a given name and price. The chat agent calls `woo__create_product` **through the gateway**, shows which tool it called, and the product is then reachable on the storefront at its permalink with that name and price. The browser never calls a tool directly. | | | todo |
+| DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | Pre-registered 2026-10-18. An order placed in the storefront today, then User A asks the agent in plain English. The agent calls `woo__list_orders` with the date resolved in the **store's** timezone (Asia/Kolkata) and returns that order. An order from a previous day is not returned. | | | todo |
+| DOD-05 | User B: external client connects with only gateway URL + B's key, sees tools of every enabled server | Pre-registered 2026-10-18. User B is a second, non-admin account that generated **its own** key in the dashboard. An external MCP client configured with only the gateway URL and that key lists all seven tools. No upstream URL and no upstream credential appear in B's client config. B's key is distinct from A's and from the bootstrap key. | | | todo |
+| DOD-06 | User B: same orders question succeeds | Pre-registered 2026-10-18. The same orders question answered through B's key returns the same order as DOD-04, and the audit rows for it are attributed to **B**, not A and not bootstrap-admin. | | | todo |
+| DOD-07 | User B: one prompt uses tools from two different upstream servers | Pre-registered 2026-10-18. One natural-language prompt from B causes calls to both `woo__*` and `fx__*` in the same answer, with the model choosing both unaided. Already evidenced for a bootstrap key in GW-4; this repeats it as user B. | | | todo |
+| DOD-08 | Revoke B's key, next call rejected | Pre-registered 2026-10-18. An admin revokes B's key in the dashboard. B's very next call returns 401 and reaches no upstream. The rejection is audited. A's key keeps working, so revocation is per-key and not a global break. | | | todo |
+| DOD-09 | Disable one upstream, its tools disappear from chat agent and external client | Pre-registered 2026-10-18. An admin disables fx in the dashboard. Its tools vanish from both the external client's `tools/list` and the chat agent's tool set, within the refresh window. The fx pod keeps running: this is a registry flag, not a scaling action. Re-enabling restores them. | | | todo |
+| DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | Pre-registered 2026-10-18. `kubectl delete pod` on woo-mcp. `tools/list` still returns the fx tools within the per-upstream timeout, the chat agent still answers an fx question, and the dashboard's Servers page shows woo as `Unreachable` with a reason. Recovery is automatic once the pod is back. | | | todo |
+| DOD-11 | Every call above in audit log, attributed to the right user | Pre-registered 2026-10-18. Every call made in DOD-03 to DOD-10 has an audit row carrying user, server, tool, timestamp, duration_ms and outcome, visible on the dashboard's Audit page. A's calls say A, B's say B. Chat turns additionally carry input and output token counts. Failures and rejections appear with failure outcomes, not silently. | | | todo |
+
+## Security checks (SEC)
+
+Pre-registered 2026-10-18, **before the team features, dashboard or chat agent existed**. These
+cover threat-model ground the Definition of Done does not exercise directly.
+
+| # | Check | Expected (written before the code exists) | Actual | Result |
+|---|---|---|---|---|
+| SEC-1 | Password storage | A dashboard password is stored as an argon2 hash. The stored value starts `$argon2`, differs for two users who choose the SAME password (so it is salted), and the plaintext appears nowhere in the database or any log. See D-012, D-013. | | todo |
+| SEC-2 | Session cookie flags | The session cookie is `HttpOnly` and `SameSite=Lax` or stricter, so script cannot read it and a cross-site form post does not carry it. `Secure` is asserted as "set when the request is HTTPS" rather than unconditionally: local runs on plain HTTP, and an unconditional assertion would be either a false failure or a lie. | | todo |
+| SEC-3 | Origin check | A state-changing POST carrying a foreign `Origin` header is rejected even with a valid session cookie. The same request with the correct Origin succeeds. This is the CSRF defence. | | todo |
+| SEC-4 | Role enforcement | A `member` session is refused every admin-only action: inviting, revoking another user's key, enabling or disabling an upstream. Refusal is server-side, not merely a hidden button. | | todo |
+| SEC-5 | Key isolation | User B cannot see, use or revoke user A's API key. A user sees only their own keys, and a raw key is shown exactly once, at creation, never again. | | todo |
+| SEC-6 | Invite tokens | An invite token is single-use and expires. Re-using a consumed token fails, as does an expired one. The token is high-entropy and is not derived from the email address. | | todo |
+| SEC-7 | Credentials never reach the browser | An upstream credential value appears in no dashboard response, no chat answer and no page source. Repeats GW-8's canary grep across the browser-facing surface. | | todo |
+| SEC-8 | Secrets never logged | Grep every pod log for the LLM API key, the gateway bootstrap key, a user password and an upstream credential. Expected 0 hits for all four. | | todo |
 
 ## D-001 spike: which MCP protocol version do real clients send?
 
