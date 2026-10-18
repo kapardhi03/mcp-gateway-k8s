@@ -1,0 +1,24 @@
+# Secrets must never reach this repo. The project's rule is that keys live in
+# Kubernetes Secrets, created by scripts/dev-secrets.sh from a prompt or from
+# an environment variable sourced from OUTSIDE the repo. See D-019 and D-011.
+#
+# These patterns are a safety net, not a licence: a gitignored secret is still
+# one `git add -f`, one editor plugin or one backup sync away from leaking.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*_rsa
+*_ed25519
+kubeconfig
+*.kubeconfig
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local tooling
+.DS_Store

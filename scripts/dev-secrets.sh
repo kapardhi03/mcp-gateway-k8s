@@ -13,13 +13,17 @@
 # Usage: scripts/dev-secrets.sh [namespace] [--ghcr]
 #   --ghcr also creates the imagePullSecret prod needs to pull from GHCR.
 #          Local does not need it: k3d imports the image directly (D-020).
+#   --llm  also creates the LLM API key Secret. Prompts for the key with the
+#          terminal echo off; never writes it to a file. See D-011.
 
 set -euo pipefail
 
 NAMESPACE="${1:-store}"
 WITH_GHCR=0
+WITH_LLM=0
 for arg in "$@"; do
   [ "$arg" = "--ghcr" ] && WITH_GHCR=1
+  [ "$arg" = "--llm" ]  && WITH_LLM=1
 done
 
 DB_SECRET="store-db"
@@ -27,6 +31,7 @@ ADMIN_SECRET="store-admin"
 WOO_SECRET="woo-api"
 GW_DB_SECRET="gateway-db"
 GW_SECRET="gateway-secrets"
+LLM_SECRET="llm-api"
 
 rand() {
   # 32 chars, alphanumeric only. WordPress and MariaDB both cope with these
@@ -107,6 +112,47 @@ else
   echo "      kubectl -n $NAMESPACE get secret $GW_SECRET -o jsonpath='{.data.bootstrap-api-key}' | base64 -d"
 fi
 
+# LLM API key. See D-011.
+#
+# Typed by Kapardhi at the prompt with `read -s`, so it is never echoed, never
+# in shell history, never in a process list and never written to a file. It
+# goes straight from the terminal into the Secret.
+#
+# If you would rather not type it every time, export ANTHROPIC_API_KEY first
+# from a file OUTSIDE the repo, e.g.:
+#     set -a; . ~/.config/mcp-gw/llm.env; set +a
+# Deliberately not a .env inside the repo: a gitignored file is still one
+# `git add -f`, one editor plugin or one backup sync away from leaking, and
+# this project's rule is that no key lives in the repo folder at all.
+if [ "$WITH_LLM" -eq 1 ]; then
+  if kubectl -n "$NAMESPACE" get secret "$LLM_SECRET" >/dev/null 2>&1; then
+    echo "SKIP  secret/$LLM_SECRET already exists"
+  else
+    key="${ANTHROPIC_API_KEY:-}"
+    if [ -z "$key" ]; then
+      printf 'Anthropic API key (input hidden): ' >&2
+      stty -echo 2>/dev/null || true
+      IFS= read -r key
+      stty echo 2>/dev/null || true
+      printf '\n' >&2
+    else
+      echo "      using ANTHROPIC_API_KEY from the environment"
+    fi
+    if [ -z "$key" ]; then
+      echo "FAIL  no key entered" >&2
+      exit 1
+    fi
+    case "$key" in
+      sk-ant-*) : ;;
+      *) echo "WARN  key does not start with sk-ant-, continuing anyway" >&2 ;;
+    esac
+    kubectl -n "$NAMESPACE" create secret generic "$LLM_SECRET" \
+      --from-literal=anthropic-api-key="$key"
+    unset key
+    echo "OK    secret/$LLM_SECRET created"
+  fi
+fi
+
 # GHCR imagePullSecret, prod only. See D-020.
 #
 # The token is read from `gh auth token` (or GHCR_TOKEN) and piped straight
@@ -132,7 +178,7 @@ fi
 
 echo
 echo "Secrets in $NAMESPACE (key names only, never values):"
-for s in "$DB_SECRET" "$ADMIN_SECRET" "$WOO_SECRET" "$GW_DB_SECRET" "$GW_SECRET"; do
+for s in "$DB_SECRET" "$ADMIN_SECRET" "$WOO_SECRET" "$GW_DB_SECRET" "$GW_SECRET" "$LLM_SECRET"; do
   keys="$(kubectl -n "$NAMESPACE" get secret "$s" \
     -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null || true)"
   printf '  %-14s %s\n' "$s" "$keys"

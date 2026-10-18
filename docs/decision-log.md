@@ -19,7 +19,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-008 | Gateway database | Gateway | open |
 | D-009 | Tool name collision scheme | Gateway | open |
 | D-010 | The two other upstream MCP servers | Gateway, demo | open |
-| D-011 | LLM for the chat agent | Chat agent | open |
+| D-011 | LLM for the chat agent | Chat agent | decided |
 | D-012 | Dashboard login and invite flow | Team features | open |
 | D-013 | API key format and hashing | Team features | open |
 | D-014 | How the chat agent acts as the logged-in user | Chat agent | open |
@@ -473,11 +473,72 @@ The requirement is the tool loop, not answer quality. The key is a Secret like a
 
 **Claude's recommendation.** Hosted free tier, with the provider behind one small interface so I can switch in one values change.
 
-**Kapardhi's choice:**
-**Kapardhi's reason (own words):**
-**"Why not X?" asked and answer:**
-**What would change my mind:**
-**Status:** open
+**Kapardhi's choice:** Claude Haiku 5.5 via the Anthropic API, with the Gemini free tier as a
+fallback. Both sit behind one small interface selected by a Helm value, `llm.provider`.
+
+**Kapardhi's reason (own words):** "Most reliable tool calling for a live demo, about $0.004 per
+question on Haiku 5.5, Gemini free tier one value away if credits run out." (AI-drafted, accepted
+by Kapardhi)
+
+**"Why not X?" asked and answer:** Not asked. Settled on measured facts plus a hard cost ceiling.
+
+**What would change my mind:** Credits run out, or Haiku's tool calling proves unreliable in
+rehearsal. Either way it is one Helm value to switch. (AI-drafted, accepted by Kapardhi)
+
+**Status:** decided
+
+**Verified against the live docs before deciding (2026-10-18).** Not from memory, and not from the
+cached table in a skill.
+
+| Fact | Value |
+|---|---|
+| Claude API model ID | `claude-haiku-5-5` |
+| Price | From $0.10 / input MTok, from $0.50 / output MTok |
+| Context window | 1M tokens |
+| Max output | 128K tokens |
+| Thinking | Adaptive |
+| Default effort | `medium` |
+| Retirement | not sooner than 7 October 2027 |
+
+Source: https://platform.claude.com/docs/en/about-claude/models/overview
+(`docs.claude.com` 302-redirects there.)
+
+Two details that change the implementation:
+
+1. **"From" $0.10 is not a flat rate.** It is the price for prompts up to 100K tokens; beyond
+   that it is $0.50 / $2.50. The chat agent's prompts are a system prompt plus seven tool
+   schemas, nowhere near 100K, so the low rate applies. Worth knowing before anyone pastes a
+   large document into the chat.
+
+2. **Thinking is adaptive and always on, and thinking tokens bill as output.** The default effort
+   is `medium`. For a chat agent answering "what orders came in today" that is more deliberation
+   than the job needs and it is billed at the output rate. The agent will set
+   `output_config: {effort: "low"}` explicitly. This is the single biggest cost lever available
+   and it costs nothing in answer quality for questions of this shape.
+
+**Tool-use API shape.** Anthropic Python SDK, `client.messages.create` with a `tools` list, looping
+while `stop_reason == "tool_use"` and feeding back `tool_result` blocks. A manual loop rather than
+the SDK's `tool_runner`, because the credit guards below need to count steps and tokens between
+every turn, which the runner does not expose. Tools come from the gateway over MCP and are
+converted to Anthropic tool definitions, so the agent calls tools **only** through the gateway and
+every call is audited there (D-014).
+
+**Credit protection, because there is no budget to top up.** All three are enforced in code, not
+by convention:
+
+| Guard | Default | Where |
+|---|---|---|
+| Max tool steps per question | 6 | hard loop cap, returns a partial answer rather than looping |
+| `max_tokens` per call | 2048 | request parameter |
+| Chat requests per day | 200 | Helm value `llm.dailyRequestCap`, counted in Postgres |
+
+Over the daily cap the agent returns a plain "daily limit reached" message and makes no API call,
+so the cap cannot be exceeded by one request.
+
+**Cost visibility.** Every chat turn records `input_tokens` and `output_tokens` in the audit log,
+so cost per question is measured rather than estimated. The $0.004 figure in the reason above is a
+conservative estimate; a three-step loop at roughly 7.5K input and 700 output tokens computes to
+about $0.0011. The measured number goes here after the DoD checks.
 
 ---
 
