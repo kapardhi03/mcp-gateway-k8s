@@ -11,7 +11,7 @@ import functools
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
@@ -45,6 +45,26 @@ def surfaced(fn):
     return wrapper
 
 mcp = MCPServer("woo-mcp", version="0.1.0")
+
+# Defined HERE, above every tool, not next to the validation that uses it.
+# `from __future__ import annotations` makes annotations strings, and
+# @mcp.tool() evaluates them when the function is DEFINED. A Literal declared
+# below the first tool that references it raises
+# "InvalidSignature: Unable to evaluate type annotations" at import, which
+# py_compile does not catch because compiling never evaluates annotations.
+#
+# Literal rather than str so the eight valid values reach the tool's JSON
+# schema as an enum. Without it a model learns them only by guessing and
+# being rejected: the validation below still rejects a bad value, but the
+# model never sees the list.
+OrderStatus = Literal[
+    "pending", "processing", "on-hold", "completed",
+    "cancelled", "refunded", "failed", "trash",
+]
+VALID_STATUSES = (
+    "pending", "processing", "on-hold", "completed",
+    "cancelled", "refunded", "failed", "trash",
+)
 
 _client: WooClient | None = None
 
@@ -180,7 +200,7 @@ def create_product(
 
 @mcp.tool()
 @surfaced
-def list_orders(status: str | None = None, date: str | None = None) -> list[dict[str, Any]]:
+def list_orders(status: OrderStatus | None = None, date: str | None = None) -> list[dict[str, Any]]:
     """List orders, newest first.
 
     status: optional WooCommerce status, for example "processing" or "completed".
@@ -205,15 +225,9 @@ def get_order(order_id: int) -> dict[str, Any]:
     return _order_summary(client().get("/wp-json/wc/v3/orders/%d" % order_id))
 
 
-VALID_STATUSES = (
-    "pending", "processing", "on-hold", "completed",
-    "cancelled", "refunded", "failed", "trash",
-)
-
-
 @mcp.tool()
 @surfaced
-def update_order_status(order_id: int, status: str) -> dict[str, Any]:
+def update_order_status(order_id: int, status: OrderStatus) -> dict[str, Any]:
     """Change one order's status.
 
     order_id: the numeric order id.

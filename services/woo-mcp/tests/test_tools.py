@@ -296,3 +296,30 @@ def test_today_uses_store_timezone_at_a_boundary_instant(monkeypatch):
     assert seen["before"] == "2026-10-18T18:30:00"
     # The UTC-shaped window must not appear.
     assert seen["after"] != "2026-10-17T00:00:00", "today fell back to UTC"
+
+
+# ------------------------------------------- schema richness regression
+
+def test_tool_schemas_load_and_status_carries_its_enum():
+    """REGRESSION, two faults in one test.
+
+    1. Importing the module must actually register the tools. `from __future__
+       import annotations` makes annotations strings and @mcp.tool() evaluates
+       them at DEFINITION time, so a type alias declared below the first tool
+       that uses it raises InvalidSignature at import. `py_compile` does not
+       catch that, because compiling never evaluates annotations. Only an
+       import does, which is what this test performs.
+
+    2. `status` must reach clients as an enum, not a bare string. Otherwise a
+       model learns the eight valid values only by guessing and being
+       rejected.
+    """
+    import asyncio
+    tools = asyncio.run(server.mcp.list_tools())
+    assert sorted(t.name for t in tools) == [
+        "create_product", "get_order", "list_orders",
+        "list_products", "update_order_status",
+    ]
+    status = [t for t in tools if t.name == "update_order_status"][0] \
+        .input_schema["properties"]["status"]
+    assert status.get("enum") == list(server.VALID_STATUSES)

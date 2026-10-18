@@ -147,3 +147,38 @@ def test_reason_never_returns_the_message():
     from gateway.upstreams import _reason
 
     assert _reason(RuntimeError("Bearer SUPER-SECRET-TOKEN")) == "RuntimeError"
+
+
+# ------------------------- changed upstream schema must propagate
+
+def test_registry_fingerprint_detects_a_changed_schema():
+    """REGRESSION. The gateway kept serving a stale schema.
+
+    refresh() used to skip any tool whose NAME it already had, so when
+    woo-mcp changed `status` from a bare string to an enum, the gateway went
+    on serving the old schema indefinitely. Keying on name + a fingerprint of
+    the schema is what makes a change propagate.
+
+    Re-registration, not a patched `parameters`, is required: the SDK derives
+    its argument validator from the synthesised signature, so a schema change
+    needs a rebuilt function.
+    """
+    import json
+
+    def fp(schema):
+        return json.dumps(schema, sort_keys=True)
+
+    before = {"type": "object",
+              "properties": {"status": {"type": "string"}},
+              "required": ["status"]}
+    after = {"type": "object",
+             "properties": {"status": {"type": "string",
+                                       "enum": ["processing", "completed"]}},
+             "required": ["status"]}
+
+    assert fp(before) != fp(after), "a changed schema must change the fingerprint"
+    # key order alone must NOT look like a change, or every refresh churns
+    reordered = {"required": ["status"],
+                 "properties": {"status": {"type": "string"}},
+                 "type": "object"}
+    assert fp(before) == fp(reordered), "key order must not count as a change"

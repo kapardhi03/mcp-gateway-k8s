@@ -49,7 +49,12 @@ class Gateway:
         self.db = Db(cfg.database_url)
         self.crypto = Crypto(cfg.encryption_key)
         self.mcp = MCPServer("gateway", version="0.1.0")
-        self._registered: dict[str, str] = {}   # public tool name -> slug
+        # public tool name -> (slug, schema fingerprint). The fingerprint is
+        # what makes a CHANGED upstream schema propagate: keying on the name
+        # alone meant a tool whose schema changed under the same name was
+        # skipped forever. Observed when woo-mcp added an enum to `status`
+        # and the gateway kept serving the old bare string.
+        self._registered: dict[str, tuple[str, str]] = {}
         self._by_slug: dict[str, Upstream] = {}
         self._last_refresh = 0.0
         self._lock = asyncio.Lock()
@@ -104,22 +109,33 @@ class Gateway:
                 if not u.enabled:
                     await self.db.set_status(u.slug, DISABLED, None)
 
-            for name in list(self._registered):
-                if name not in wanted:
+            def fingerprint(schema: dict) -> str:
+                # sort_keys so an unordered dict does not look like a change
+                return json.dumps(schema, sort_keys=True)
+
+            desired: dict[str, tuple[str, dict, str]] = {}
+            for name, (slug, up) in wanted.items():
+                schema = getattr(up, "input_schema", None) or {"type": "object", "properties": {}}
+                desired[name] = (slug, schema,
+                                 "[%s] %s" % (slug, getattr(up, "description", "") or ""))
+
+            # Drop anything gone, and anything whose schema changed: the SDK
+            # derives its argument validator from the synthesised signature,
+            # so a changed schema needs a rebuilt function, not a patched
+            # `parameters`.
+            for name, (slug, fp) in list(self._registered.items()):
+                if name not in desired or fingerprint(desired[name][1]) != fp:
                     self.mcp.remove_tool(name)
                     self._registered.pop(name, None)
 
-            for name, (slug, t) in wanted.items():
+            for name, (slug, schema, description) in desired.items():
                 if name in self._registered:
                     continue
-                schema = getattr(t, "input_schema", None) or {"type": "object", "properties": {}}
                 fn = proxy.build_proxy_fn(name, schema, self._sink)
-                self.mcp.add_tool(
-                    fn, name=name,
-                    description="[%s] %s" % (slug, getattr(t, "description", "") or ""))
+                self.mcp.add_tool(fn, name=name, description=description)
                 # Pin the upstream's exact schema; the derived one is lossy.
                 self.mcp._tool_manager.get_tool(name).parameters = schema
-                self._registered[name] = slug
+                self._registered[name] = (slug, fingerprint(schema))
 
             self._last_refresh = time.monotonic()
 
@@ -203,7 +219,22 @@ def auth_middleware(app, gw: "Gateway"):
         if user is None:
             await gw.db.audit("anonymous", None, None, 0, "rejected",
                               "missing or invalid API key")
-            resp = JSONResponse({"error": "unauthorized"}, status_code=401)
+            # WWW-Authenticate tells a client HOW to authenticate. Without
+            # it, MCP Inspector met our bare 401 and fell back to OAuth
+            # Dynamic Client Registration, then reported
+            # "Dynamic Client Registration rejected (HTTP 401)" -- an error
+            # naming OAuth when the real cause was an empty bearer token.
+            # RFC 6750 section 3.
+            resp = JSONResponse(
+                {"error": "unauthorized",
+                 "detail": "send a gateway API key as: Authorization: Bearer gw_<prefix>_<secret>"},
+                status_code=401,
+                headers={
+                    "WWW-Authenticate":
+                        'Bearer realm="mcp-gateway", error="invalid_token", '
+                        'error_description="missing or invalid gateway API key"'
+                },
+            )
             await resp(scope, receive, send)
             return
 
