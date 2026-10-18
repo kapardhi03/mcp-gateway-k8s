@@ -1,0 +1,30 @@
+/* Plain and readable. No design system, no framework CSS. */
+:root{--bg:#fbfbfa;--fg:#1a1a18;--mut:#6b6b66;--line:#e2e2dd;--acc:#2f5d50;--bad:#9b2c2c;--ok:#2f6f3e}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;align-items:center;gap:1rem;padding:.75rem 1.25rem;border-bottom:1px solid var(--line);background:#fff}
+header h1{font-size:1rem;margin:0;font-weight:600}
+header .who{margin-left:auto;color:var(--mut);font-size:.875rem}
+nav{display:flex;gap:.25rem;padding:0 1.25rem;border-bottom:1px solid var(--line);background:#fff;flex-wrap:wrap}
+nav button{border:0;background:none;padding:.6rem .8rem;cursor:pointer;color:var(--mut);border-bottom:2px solid transparent;font:inherit}
+nav button.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+main{padding:1.25rem;max-width:1100px}
+h2{font-size:1.05rem;margin:0 0 .75rem}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line)}
+th,td{text-align:left;padding:.5rem .65rem;border-bottom:1px solid var(--line);font-size:.875rem;vertical-align:top}
+th{background:#f6f6f4;font-weight:600;color:var(--mut)}
+tr:last-child td{border-bottom:0}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:#f2f2ef;padding:.1rem .3rem;border-radius:3px;word-break:break-all}
+button.act{font:inherit;padding:.4rem .7rem;border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer}
+button.act:hover{background:#f2f2ef}
+button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+input,select{font:inherit;padding:.45rem .55rem;border:1px solid var(--line);border-radius:4px;background:#fff}
+.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.75rem}
+.pill{font-size:.75rem;padding:.1rem .45rem;border-radius:10px;border:1px solid var(--line)}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .mut{color:var(--mut)}
+.note{background:#fff;border:1px solid var(--line);border-left:3px solid var(--acc);padding:.6rem .8rem;margin:.5rem 0;font-size:.875rem}
+.err{border-left-color:var(--bad);color:var(--bad)}
+.login{max-width:360px;margin:4rem auto;background:#fff;border:1px solid var(--line);padding:1.5rem;border-radius:6px}
+.login h1{font-size:1.1rem;margin:0 0 1rem}
+.login input{width:100%;margin-bottom:.6rem}
+.login button{width:100%}

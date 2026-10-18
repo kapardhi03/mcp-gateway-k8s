@@ -24,6 +24,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import JSONResponse
@@ -295,11 +297,16 @@ def build_app() -> FastAPI:
 
     @api.get("/admin/upstreams")
     async def admin_upstreams() -> list[dict[str, Any]]:
-        # Never returns credential_enc. Not even encrypted.
+        # Never returns credential_enc, nor the decrypted value. The page
+        # gets a boolean and nothing more.
+        by_slug: dict[str, list[str]] = {}
+        for tool_name, (slug, _fp) in gw._registered.items():
+            by_slug.setdefault(slug, []).append(tool_name)
         return [
             {"slug": u.slug, "url": u.url, "enabled": u.enabled,
              "status": u.status, "last_error": u.last_error,
-             "has_credential": bool(u.credential_enc)}
+             "has_credential": bool(u.credential_enc),
+             "tools": sorted(by_slug.get(u.slug, []))}
             for u in await gw.db.list_upstreams()
         ]
 
@@ -311,6 +318,20 @@ def build_app() -> FastAPI:
     # MCP mount below so these paths win.
     web.install_error_handler(api)
     api.include_router(web.build_router(gw))
+
+    # Dashboard. Static assets, then the SPA shell on the two page routes.
+    _static = os.path.join(os.path.dirname(__file__), "static")
+    api.mount("/static", StaticFiles(directory=_static), name="static")
+
+    @api.get("/")
+    async def index() -> FileResponse:
+        return FileResponse(os.path.join(_static, "index.html"))
+
+    @api.get("/accept")
+    async def accept_page() -> FileResponse:
+        # Same shell; the page reads ?token= itself. The token is never
+        # sent to the server by this GET, only by the POST that uses it.
+        return FileResponse(os.path.join(_static, "index.html"))
 
     # Mounted at "/" so the MCP endpoint is exactly /mcp with no redirect.
     # FastAPI matches routes in order and these are registered first, so
