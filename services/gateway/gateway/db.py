@@ -30,6 +30,41 @@ CREATE TABLE IF NOT EXISTS upstreams (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id             SERIAL PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    name           TEXT NOT NULL,
+    role           TEXT NOT NULL DEFAULT 'member',
+    -- argon2id. NULL until the invite is accepted and a password is set.
+    password_hash  TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    disabled_at    TIMESTAMPTZ
+);
+
+-- The token itself is a bearer credential until consumed, so only its
+-- SHA-256 is stored: database read access must not let someone accept an
+-- invite as that person.
+CREATE TABLE IF NOT EXISTS invites (
+    id          SERIAL PRIMARY KEY,
+    email       TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'member',
+    token_hash  TEXT NOT NULL UNIQUE,
+    created_by  INTEGER REFERENCES users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ
+);
+
+-- Server-side sessions. The cookie carries this opaque id and nothing else:
+-- no user id, no role, no signature, nothing a tampered cookie could assert.
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);
+
 CREATE TABLE IF NOT EXISTS api_keys (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -39,6 +74,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at  TIMESTAMPTZ
 );
+-- Added after api_keys shipped without it, so it is a guarded ALTER rather
+-- than a column in the CREATE: an existing deployment already has the table.
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
 
 -- Every tool call, success or failure, from day one.
 CREATE TABLE IF NOT EXISTS audit (
@@ -137,6 +175,151 @@ class Db:
     async def revoke_key(self, prefix: str) -> None:
         async with self._pool.connection() as c:
             await c.execute("UPDATE api_keys SET revoked_at=now() WHERE prefix=%s", (prefix,))
+
+    # ---------------- users ----------------
+
+    async def create_user(self, email: str, name: str, role: str,
+                          password_hash: str | None = None) -> int:
+        async with self._pool.connection() as c:
+            row = await (await c.execute(
+                """INSERT INTO users (email, name, role, password_hash)
+                   VALUES (%s,%s,%s,%s)
+                   ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name
+                   RETURNING id""",
+                (email.lower().strip(), name, role, password_hash))).fetchone()
+        return int(row[0])
+
+    async def get_user_by_email(self, email: str):
+        async with self._pool.connection() as c:
+            return await (await c.execute(
+                """SELECT id, email, name, role, password_hash, disabled_at
+                   FROM users WHERE email=%s""", (email.lower().strip(),))).fetchone()
+
+    async def get_user(self, user_id: int):
+        async with self._pool.connection() as c:
+            return await (await c.execute(
+                """SELECT id, email, name, role, password_hash, disabled_at
+                   FROM users WHERE id=%s""", (user_id,))).fetchone()
+
+    async def list_users(self) -> list[dict[str, Any]]:
+        async with self._pool.connection() as c:
+            rows = await (await c.execute(
+                """SELECT id, email, name, role, created_at, disabled_at,
+                          (password_hash IS NOT NULL) AS has_password
+                   FROM users ORDER BY id""")).fetchall()
+        return [{"id": r[0], "email": r[1], "name": r[2], "role": r[3],
+                 "created_at": r[4].isoformat(), "disabled": r[5] is not None,
+                 "has_password": r[6]} for r in rows]
+
+    async def set_password(self, user_id: int, password_hash: str) -> None:
+        async with self._pool.connection() as c:
+            await c.execute("UPDATE users SET password_hash=%s WHERE id=%s",
+                            (password_hash, user_id))
+
+    # ---------------- invites ----------------
+
+    async def create_invite(self, email: str, role: str, token_hash: str,
+                            created_by: int | None, expires_at) -> int:
+        async with self._pool.connection() as c:
+            row = await (await c.execute(
+                """INSERT INTO invites (email, role, token_hash, created_by, expires_at)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                (email.lower().strip(), role, token_hash, created_by, expires_at))).fetchone()
+        return int(row[0])
+
+    async def find_invite(self, token_hash: str):
+        async with self._pool.connection() as c:
+            return await (await c.execute(
+                """SELECT id, email, role, expires_at, consumed_at
+                   FROM invites WHERE token_hash=%s""", (token_hash,))).fetchone()
+
+    async def consume_invite(self, invite_id: int) -> bool:
+        """Single-use, enforced in SQL. The WHERE clause makes a second
+        concurrent accept a no-op rather than a race."""
+        async with self._pool.connection() as c:
+            cur = await c.execute(
+                "UPDATE invites SET consumed_at=now() WHERE id=%s AND consumed_at IS NULL",
+                (invite_id,))
+        return cur.rowcount == 1
+
+    async def list_invites(self) -> list[dict[str, Any]]:
+        async with self._pool.connection() as c:
+            rows = await (await c.execute(
+                """SELECT id, email, role, created_at, expires_at, consumed_at
+                   FROM invites ORDER BY id DESC""")).fetchall()
+        return [{"id": r[0], "email": r[1], "role": r[2],
+                 "created_at": r[3].isoformat(), "expires_at": r[4].isoformat(),
+                 "consumed": r[5] is not None} for r in rows]
+
+    # ---------------- sessions ----------------
+
+    async def create_session(self, sid: str, user_id: int, expires_at) -> None:
+        async with self._pool.connection() as c:
+            await c.execute(
+                "INSERT INTO sessions (id, user_id, expires_at) VALUES (%s,%s,%s)",
+                (sid, user_id, expires_at))
+
+    async def get_session(self, sid: str):
+        async with self._pool.connection() as c:
+            return await (await c.execute(
+                """SELECT s.user_id, s.expires_at, u.email, u.name, u.role, u.disabled_at
+                   FROM sessions s JOIN users u ON u.id = s.user_id
+                   WHERE s.id=%s""", (sid,))).fetchone()
+
+    async def delete_session(self, sid: str) -> None:
+        async with self._pool.connection() as c:
+            await c.execute("DELETE FROM sessions WHERE id=%s", (sid,))
+
+    # ---------------- api keys, per user ----------------
+
+    async def create_user_key(self, user_id: int, name: str, prefix: str,
+                              key_hash: str, role: str) -> int:
+        async with self._pool.connection() as c:
+            row = await (await c.execute(
+                """INSERT INTO api_keys (name, prefix, key_hash, role, user_id)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                (name, prefix, key_hash, role, user_id))).fetchone()
+        return int(row[0])
+
+    async def list_keys_for_user(self, user_id: int) -> list[dict[str, Any]]:
+        async with self._pool.connection() as c:
+            rows = await (await c.execute(
+                """SELECT id, name, prefix, created_at, revoked_at
+                   FROM api_keys WHERE user_id=%s ORDER BY id DESC""", (user_id,))).fetchall()
+        return [{"id": r[0], "name": r[1], "prefix": r[2],
+                 "created_at": r[3].isoformat(), "revoked": r[4] is not None} for r in rows]
+
+    async def list_all_keys(self) -> list[dict[str, Any]]:
+        async with self._pool.connection() as c:
+            rows = await (await c.execute(
+                """SELECT k.id, k.name, k.prefix, k.created_at, k.revoked_at,
+                          u.email
+                   FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
+                   ORDER BY k.id DESC""")).fetchall()
+        return [{"id": r[0], "name": r[1], "prefix": r[2],
+                 "created_at": r[3].isoformat(), "revoked": r[4] is not None,
+                 "owner": r[5] or "bootstrap"} for r in rows]
+
+    async def key_owner(self, key_id: int) -> int | None:
+        async with self._pool.connection() as c:
+            row = await (await c.execute(
+                "SELECT user_id FROM api_keys WHERE id=%s", (key_id,))).fetchone()
+        return row[0] if row else None
+
+    async def revoke_key_by_id(self, key_id: int) -> bool:
+        async with self._pool.connection() as c:
+            cur = await c.execute(
+                "UPDATE api_keys SET revoked_at=now() WHERE id=%s AND revoked_at IS NULL",
+                (key_id,))
+        return cur.rowcount == 1
+
+    async def find_key_with_user(self, prefix: str):
+        """(name, key_hash, role, user_email) for a live key."""
+        async with self._pool.connection() as c:
+            return await (await c.execute(
+                """SELECT k.name, k.key_hash, k.role, u.email
+                   FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
+                   WHERE k.prefix=%s AND k.revoked_at IS NULL""", (prefix,))).fetchone()
 
     # ---------------- audit ----------------
 

@@ -7,3 +7,7 @@ fastapi==0.143.3
 psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
 cryptography==50.0.2
+# Team features (step 2). Versions queried from the index on 2026-10-18.
+argon2-cffi==25.1.0
+python-multipart==0.0.32
+jinja2==3.1.6

@@ -28,7 +28,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import JSONResponse
 
-from . import apikeys, proxy
+from . import apikeys, proxy, web
 from .config import Config
 from .crypto import Crypto
 from .db import Db, Upstream
@@ -306,6 +306,11 @@ def build_app() -> FastAPI:
     @api.get("/admin/audit")
     async def admin_audit(limit: int = 50) -> list[dict[str, Any]]:
         return await gw.db.recent_audit(limit)
+
+    # Dashboard auth, invites, members and keys. Mounted before the catch-all
+    # MCP mount below so these paths win.
+    web.install_error_handler(api)
+    api.include_router(web.build_router(gw))
 
     # Mounted at "/" so the MCP endpoint is exactly /mcp with no redirect.
     # FastAPI matches routes in order and these are registered first, so
