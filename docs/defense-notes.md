@@ -34,6 +34,7 @@ Sections follow the required demo video sections.
 | 3.4 | What happens on a timeout? On a dead upstream? | | | todo |
 | 3.5 | Which MCP spec version, and why? | | | todo |
 | 3.6 | Why does woo-mcp need two store URLs? | | | todo |
+| 3.7 | What happens if an upstream changes a tool's schema but keeps the name? | | | todo |
 
 ## 4. Security posture
 
