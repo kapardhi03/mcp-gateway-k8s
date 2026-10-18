@@ -29,6 +29,7 @@ Reversals get a new entry. Old entries are never edited except to set status `su
 | D-018 | Repo visibility before submission | Submission | decided |
 | D-019 | How dev and prod secrets reach the chart | Store chart, all charts | open, needs Kapardhi's words |
 | D-020 | Image registry and build (GHCR, multi-arch) | All images | decided |
+| D-022 | TLS on the VPS | VPS day, threat model | open |
 
 ---
 
@@ -823,3 +824,70 @@ pulling needs `read:packages`, and pruning old versions needs `delete:packages`.
 the VPS step only, not local work.
 
 **Status:** decided
+
+---
+
+## D-022: TLS on the VPS
+
+**Why this matters.** Two things depend on it. The session cookie's `Secure` flag is set from
+`request.url.scheme == "https"` (SEC-2), so on a plain-HTTP prod it never turns on and the session
+cookie travels in clear. And a reviewer opening a public dashboard over `http://` will notice.
+
+**Planned, not built.** cert-manager with Let's Encrypt over HTTP-01 for the two public hosts.
+
+**Verified before planning, and it changes the answer (2026-10-18).**
+
+1. **Let's Encrypt keys its main limit to the registered domain, and uses the Public Suffix List
+   to decide what that is.** Quoted from the rate-limit page: *"We use the Public Suffix List to
+   identify registered domains."* The limit is **50 certificates per registered domain every 7
+   days**, and it is **global: requests from all accounts count toward it**.
+   Source: https://letsencrypt.org/docs/rate-limits/
+
+2. **`sslip.io` is NOT on the Public Suffix List.** Checked by downloading the list
+   (16,570 lines) and grepping it, with `github.io` and `herokuapp` as controls to prove the file
+   and the grep were working. `nip.io` is absent too.
+   Source: https://publicsuffix.org/list/public_suffix_list.dat
+
+**Therefore the planned approach is the risky one.** Because `sslip.io` is not a public suffix,
+`sslip.io` itself is the registered domain, and `store.34.93.101.10.sslip.io` shares one global
+bucket of 50 certificates per week with **every other sslip.io user in the world**. sslip.io is
+widely used. We would be competing for that bucket with strangers, could be refused at any moment
+for reasons entirely outside this project, and would have no way to tell in advance. That is a bad
+dependency to put under a demo.
+
+**Options.**
+
+- **A. sslip.io + cert-manager, as originally planned.** No new accounts. Shares a global 50/week
+  limit with every sslip.io user; failure is outside our control and arrives without warning.
+- **B. A free dynamic-DNS hostname whose provider IS on the Public Suffix List.** Checked the same
+  list: `duckdns.org`, `dynu.net`, `freemyip.com` and `no-ip.org` are all in its PRIVATE section.
+  So `something.duckdns.org` is its own registered domain with its own 50/week bucket, shared with
+  nobody. Free, and costs one signup plus an A record pointing at `34.93.101.10`.
+  **No wildcard-IP service is on the list**: sslip.io, nip.io, traefik.me, localtest.me, lvh.me,
+  local-ip.co, 1u.ms and xip.io were all checked and all absent.
+- **C. Buy a domain.** Cleanest and fully under our control. Costs money, which the brief for this
+  project does not have.
+- **D. No TLS in prod.** Then `Secure` never turns on, the session cookie travels in clear over
+  the public internet, and that has to be written plainly in the threat model rather than left for
+  a reviewer to find.
+
+**Claude's recommendation.** **B.** It is free, it removes the only real risk in A, and it is a
+smaller change than it sounds: `ingress.host` is already a per-environment value, so prod moves
+from `store.34.93.101.10.sslip.io` to `store.<name>.duckdns.org` with no template change. Local
+stays `*.localhost` either way. Keep sslip.io as the no-TLS fallback if the DuckDNS signup is
+unwelcome.
+
+**Whatever is chosen, the threat model (S-07) must state it.** If prod ends up on plain HTTP, the
+sentence to write is that the session cookie is sent without `Secure`, so anyone on the network
+path can read it and resume the session, and that this is accepted for a demo and would not be
+accepted in production.
+
+**Kapardhi's choice:** _TODO Kapardhi_
+
+**Kapardhi's reason (own words):** _TODO Kapardhi_
+
+**"Why not X?" asked and answer:** _TODO Kapardhi_
+
+**What would change my mind:** _TODO Kapardhi_
+
+**Status:** open, needs Kapardhi's words. Nothing built.

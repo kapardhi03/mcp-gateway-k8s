@@ -48,6 +48,10 @@ Sections follow the required demo video sections.
 | 4.6 | What can a member do with a shared upstream credential they never see? | | | todo |
 | 4.7 | Tool descriptions written to manipulate the model: what is the risk and the mitigation? | | | todo |
 | 4.8 | What can one team member do to another? | | | todo |
+| 4.9 | Why argon2 for passwords but SHA-256 for API keys? | | | todo |
+| 4.10 | How do you stop two people accepting the same invite at once? | | | todo |
+| 4.11 | How is the first admin created, and why not a default password? | | | todo |
+| 4.12 | What does SameSite=lax plus an Origin check protect against, and what doesn't it? | | | todo |
 
 ## 5. Chat agent
 
