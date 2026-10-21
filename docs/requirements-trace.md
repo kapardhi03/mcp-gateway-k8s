@@ -340,7 +340,7 @@ under both the correct and the incorrect implementation is not evidence, however
 Any other order is still a valid test that date filtering works, but it says nothing about the
 timezone.
 
-## Finding: the Servers page lags the served tool list by one refresh
+## Finding, now fixed: the Servers page lagged the served tool list
 
 Seen while evidencing DOD-10, in both directions:
 
@@ -356,10 +356,34 @@ is the thing that lags.
 
 **Why it matters anyway.** It is a demo. A reviewer who kills a pod and sees the dashboard still
 saying `Connected`, or sees `Unreachable` next to tools that plainly work, will read it as a bug
-whatever the explanation. The fix is one line, `await gw.refresh()` at the top of the handler,
-paid for by one fan-out per page load. **Not done: this is a behaviour change and it is
-Kapardhi's call**, and the honest alternative is to leave it and explain it, since a status page
-that is explicitly a cached last-known-state is a defensible design.
+whatever the explanation.
+
+**Fixed 2026-10-22, gateway 0.4.2.** `/admin/upstreams` now refreshes before it reads.
+
+**Kapardhi asked for a 5 second cache and for the page to show `Unreachable` within one page
+load. Those two conflict, and the measurement settled it.** With any cache, the first load after
+a failure can land inside the window and return the stale status, which is exactly what 5
+seconds did: `Unreachable` appeared on the **third** load, about 6 seconds in. The cache existed
+to stop a page load costing a fan-out. Measured, that concern does not hold:
+
+| | cached read | read that fans out |
+|---|---|---|
+| Servers page load | ~3 ms | ~150 ms |
+
+The Servers tab polls every 5 seconds, so refreshing on every read produces the *same* one
+fan-out per 5 seconds that a 5 second cache produces. The cache bought nothing and cost
+correctness, so the default is now refresh-on-read (`STATUS_MAX_AGE_SECONDS=0`). Kapardhi's 5
+second version is one environment variable away if the trade ever changes.
+
+**Re-verified against a real outage, gateway 0.4.2:**
+
+| Moment | First page load says |
+|---|---|
+| Baseline | `fx Connected 2` / `woo Connected 5` (107 ms) |
+| Immediately after woo's Endpoints vanish | `fx Connected 2` / **`woo Unreachable 0`** (199 ms) |
+| Immediately after the pod is Ready again | `fx Connected 2` / **`woo Connected 5`** (291 ms) |
+
+One page load in each direction, as asked.
 
 ## Third upstream: GitHub remote MCP (GH-1 to GH-4)
 

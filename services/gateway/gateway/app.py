@@ -43,6 +43,27 @@ log = logging.getLogger("gateway")
 current_user: contextvars.ContextVar[str] = contextvars.ContextVar("current_user", default="anonymous")
 
 REFRESH_MAX_AGE = float(os.environ.get("REFRESH_MAX_AGE_SECONDS", "3"))
+# How stale the Servers page is allowed to be, in seconds. 0 means refresh on
+# every read.
+#
+# The page reads the stored status, which only a refresh writes, so without
+# this it sat a whole health-loop cycle behind what /mcp was already serving:
+# during the DOD-10 outage it still said Connected while clients had correctly
+# dropped to the two fx tools, and said Unreachable after recovery while all
+# seven were back. Clients were never wrong; the page was.
+#
+# Why 0 and not 5. Kapardhi asked for a 5 second cache AND for the page to
+# show Unreachable within one page load. Those conflict: with any cache at
+# all, the first load after a failure can fall inside the window and return
+# the old status, which is exactly what 5 did when measured (3 loads, about
+# 6 seconds). The cache was there to stop a page load costing a fan-out, and
+# the measurement says that worry does not survive contact with the numbers:
+# a cached load is ~3 ms and a load that fans out is ~150 ms, while the
+# Servers tab polls every 5 seconds, so refreshing on every read produces the
+# SAME one-fan-out-per-5-seconds that a 5 second cache produces. The cache
+# bought nothing and cost correctness. Set STATUS_MAX_AGE_SECONDS=5 to get it
+# back.
+STATUS_MAX_AGE = float(os.environ.get("STATUS_MAX_AGE_SECONDS", "0"))
 
 
 class Gateway:
@@ -84,7 +105,7 @@ class Gateway:
 
     # ---------------------------------------------------------- registry
 
-    async def refresh(self, force: bool = False) -> None:
+    async def refresh(self, force: bool = False, max_age: float | None = None) -> None:
         """Rebuild the served tool list from the live upstreams.
 
         Called before each MCP request when the cache is older than
@@ -93,7 +114,8 @@ class Gateway:
         registry flag take effect (GW-6) without waiting for the slow loop.
         """
         async with self._lock:
-            if not force and (time.monotonic() - self._last_refresh) < REFRESH_MAX_AGE:
+            age = REFRESH_MAX_AGE if max_age is None else max_age
+            if not force and (time.monotonic() - self._last_refresh) < age:
                 return
             rows = await self.db.list_upstreams()
             self._by_slug = {u.slug: u for u in rows}
@@ -333,6 +355,11 @@ def build_app() -> FastAPI:
 
     @api.get("/admin/upstreams")
     async def admin_upstreams() -> list[dict[str, Any]]:
+        # Refresh before reading, so the page cannot disagree with what
+        # /mcp is serving. force=True when STATUS_MAX_AGE is 0, because a
+        # zero max_age still short-circuits on an identical monotonic clock
+        # reading, which is reachable at this speed.
+        await gw.refresh(force=STATUS_MAX_AGE <= 0, max_age=STATUS_MAX_AGE)
         # Never returns credential_enc, nor the decrypted value. The page
         # gets a boolean and nothing more.
         by_slug: dict[str, list[str]] = {}

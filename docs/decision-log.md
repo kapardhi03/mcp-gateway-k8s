@@ -488,6 +488,18 @@ rehearsal. Either way it is one Helm value to switch. (AI-drafted, accepted by K
 
 **Status:** decided
 
+**Addendum, 2026-10-22: the Gemini adapter stays unwritten.** Kapardhi's call, after Claude
+flagged it rather than writing it. The reasoning: an adapter with no key to test it against would
+be untested code sitting on the one path that exists for when the Anthropic credits run out,
+which is the worst possible moment to discover it does not work. What exists instead is the
+seam. `gateway/llm.py` defines the provider interface, `PROVIDERS` maps names to classes, and
+`llm.provider` selects one in values. `gemini` is registered and raises immediately with a
+message saying it is not implemented, so choosing it fails at the first chat request with a clear
+cause rather than a confusing one. The work, when there is a key: Gemini's `generateContent`
+takes `tools: [{functionDeclarations: [...]}]` and returns functionCall parts, so `complete()`
+is a shape translation plus the same usage accounting. **To be written up in the design note
+(S-06) as a deliberate seam, not an omission.**
+
 **Verified against the live docs before deciding (2026-10-18).** Not from memory, and not from the
 cached table in a skill.
 
@@ -988,10 +1000,19 @@ It does not, with a PAT.
    stores a URL per upstream already, so this is a value, not a code change.
    Source: https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md
 
-   **This needs Kapardhi's choice and is not being picked silently.** Issues read and write is
-   what the PAT will be scoped to, so `/x/issues` matches it exactly, and the measured cost of a
-   turn today is 4438 input tokens. The default toolset would add a large multiple of that to
-   every turn. Recommendation: use `/x/issues`. Open until Kapardhi says.
+   **Kapardhi's choice: the issues-only toolset, `https://api.githubcopilot.com/mcp/x/issues`.**
+
+   **Kapardhi's reason (own words):** "least privilege, smaller prompts."
+
+   Both halves are load-bearing. Least privilege: the URL matches the PAT's scope exactly, so the
+   gateway cannot reach a GitHub capability the token was not meant to grant, and the two
+   controls agree instead of one quietly being wider than the other. Smaller prompts: every
+   upstream tool's name, description and schema is re-sent on every chat turn, so the default
+   toolset would add a large multiple of the measured 4438 input tokens to every question,
+   including questions about orders that have nothing to do with GitHub. Measured evidence for
+   that effect already exists: during the DOD-10 outage, with woo's five tools gone, an fx
+   question cost 2447 input tokens against 7330 for a two-upstream question with all seven
+   present. Tool count drives cost directly.
 
 **Egress.** The gateway will need to reach `api.githubcopilot.com` from inside the cluster. It
 already reaches `api.anthropic.com` for the chat agent, so egress works; worth a note only because
