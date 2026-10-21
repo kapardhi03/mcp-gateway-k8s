@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Request, Response
 from fastapi.responses import JSONResponse
 
-from . import accounts, apikeys
+from . import accounts, apikeys, chat as chat_agent
 from .accounts import ROLE_ADMIN, ROLE_MEMBER, ROLES, SESSION_COOKIE, User
 
 
@@ -208,6 +208,37 @@ def build_router(gw) -> APIRouter:
     async def admin_keys(request: Request) -> list[dict[str, Any]]:
         await _require(request, db, admin=True)
         return await db.list_all_keys()
+
+    # ------------------------------------------------------------ chat
+
+    @r.get("/chat/config")
+    async def chat_config(request: Request) -> dict[str, Any]:
+        """What the Chat tab needs to render itself. No key, ever."""
+        await _require(request, db)
+        c = gw.agent.cfg
+        return {
+            "configured": c.configured,
+            "model": c.model if c.configured else None,
+            "provider": c.provider,
+            "max_steps": c.max_steps,
+            "daily_cap": c.daily_cap,
+            "used_today": await db.chat_turns_today(),
+            "max_question_chars": c.max_question_chars,
+        }
+
+    @r.post("/chat")
+    async def chat(request: Request,
+                   payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        _origin(request)
+        # Any signed-in user, member or admin. The agent acts AS them: it
+        # mints a short-lived key for this user and calls the gateway's own
+        # /mcp with it, so the tools it can reach and the audit attribution
+        # are both theirs and not the agent's.
+        user = await _require(request, db)
+        try:
+            return await gw.agent.run(user, str(payload.get("question", "")))
+        except chat_agent.ChatError as exc:
+            raise HttpError(exc.status, exc.message) from exc
 
     # ------------------------------------------------------------ upstreams
 

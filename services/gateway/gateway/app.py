@@ -30,7 +30,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import JSONResponse
 
-from . import apikeys, proxy, web
+from . import apikeys, chat, proxy, web
 from .config import Config
 from .crypto import Crypto
 from .db import Db, Upstream
@@ -251,21 +251,57 @@ def auth_middleware(app, gw: "Gateway"):
 
 
 async def _authenticate(gw: "Gateway", token: str) -> str | None:
+    """Return the audit identity behind a presented key, or None.
+
+    The identity is the owning user's EMAIL where the key has an owner, and
+    the key's name only for the ownerless bootstrap key. This matters: every
+    key a user creates in the dashboard is named "default" unless they rename
+    it, so attributing audit rows to the key name made A's calls and B's
+    calls both read "default". DOD-06 and DOD-11 ask who made each call, and
+    the answer has to be a person.
+    """
     prefix = apikeys.prefix_of(token)
     if not prefix:
         return None
-    row = await gw.db.find_key_by_prefix(prefix)
+    row = await gw.db.find_key_with_user(prefix)
     if not row:
         return None
-    name, key_hash, _role = row
-    return name if apikeys.verify(token, key_hash) else None
+    name, key_hash, _role, email = row
+    if not apikeys.verify(token, key_hash):
+        return None
+    return email or name
 
 
 # -------------------------------------------------------------- app
 
+def chat_config(cfg: Config) -> chat.ChatConfig:
+    """The chat agent's settings, including how it reaches its own /mcp.
+
+    Loopback, not the Service name: the agent is a client of THIS process, so
+    going out to the Service would add a hop that could land on a different
+    replica mid-turn.
+    """
+    port = os.environ.get("PORT", "8080")
+    return chat.ChatConfig(
+        provider=cfg.llm_provider,
+        model=cfg.llm_model,
+        api_key=cfg.llm_api_key,
+        effort=cfg.llm_effort,
+        max_steps=cfg.chat_max_steps,
+        max_tokens=cfg.chat_max_tokens,
+        daily_cap=cfg.chat_daily_cap,
+        max_question_chars=cfg.chat_max_question_chars,
+        max_tool_result_chars=cfg.chat_max_tool_result_chars,
+        self_mcp_url=os.environ.get(
+            "GATEWAY_SELF_MCP_URL", "http://127.0.0.1:%s/mcp" % port),
+        tool_timeout_seconds=cfg.upstream_timeout_seconds * 2,
+    )
+
+
 def build_app() -> FastAPI:
     cfg = Config.from_env()
     gw = Gateway(cfg)
+    gw.agent = chat.Agent(gw, chat_config(cfg))
 
     # The SDK's Streamable HTTP app carries its own lifespan, which starts the
     # session manager's task group. Mounting it inside FastAPI does NOT run

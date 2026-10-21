@@ -60,6 +60,30 @@ spec:
               value: {{ .Values.gateway.upstreamTimeoutSeconds | quote }}
             - name: HEALTH_INTERVAL_SECONDS
               value: {{ .Values.gateway.healthIntervalSeconds | quote }}
+            # Optional: `optional: true` so a gateway installed without the
+            # llm-api Secret starts anyway, with the Chat tab switched off.
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.existingSecret }}
+                  key: {{ .Values.llm.secretKeys.apiKey }}
+                  optional: true
+            - name: LLM_PROVIDER
+              value: {{ .Values.llm.provider | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.llm.model | quote }}
+            - name: LLM_EFFORT
+              value: {{ .Values.llm.effort | quote }}
+            - name: CHAT_MAX_STEPS
+              value: {{ .Values.chat.maxSteps | quote }}
+            - name: CHAT_MAX_TOKENS
+              value: {{ .Values.chat.maxTokens | quote }}
+            - name: CHAT_DAILY_CAP
+              value: {{ .Values.chat.dailyCap | quote }}
+            - name: CHAT_MAX_QUESTION_CHARS
+              value: {{ .Values.chat.maxQuestionChars | quote }}
+            - name: CHAT_MAX_TOOL_RESULT_CHARS
+              value: {{ .Values.chat.maxToolResultChars | quote }}
             {{- range $slug, $url := .Values.upstreams }}
             - name: {{ upper $slug }}_MCP_URL
               value: {{ $url | quote }}

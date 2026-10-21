@@ -48,6 +48,42 @@ gateway:
     encryptionKey: encryption-key
     bootstrapApiKey: bootstrap-api-key
 
+# Chat agent. D-011. No key here: the chart takes the NAME of a Secret that
+# already exists, made by scripts/dev-secrets.sh --llm.
+#
+# Every number below is a credit guard. There is no budget to top up, so the
+# defaults are deliberately tight rather than generous.
+llm:
+  # anthropic | gemini. Only anthropic is implemented; gemini raises at the
+  # first chat request with a message saying so. See D-011 and gateway/llm.py.
+  provider: anthropic
+  model: claude-haiku-5-5
+  # Thinking is adaptive and always on, and thinking tokens bill at the
+  # OUTPUT rate. "medium" is the model default and is more deliberation than
+  # a question like "what orders came in today" needs.
+  effort: low
+  # Optional. With no Secret the gateway still starts and serves /mcp and the
+  # dashboard; the Chat tab says it is switched off. A reviewer with no
+  # Anthropic account can run everything else.
+  existingSecret: llm-api
+  secretKeys:
+    apiKey: anthropic-api-key
+
+chat:
+  # Hard stop on a runaway tool loop.
+  maxSteps: 6
+  # Per model call, not per turn: a turn can make up to maxSteps calls.
+  maxTokens: 1024
+  # Turns per day, counted across ALL users, because the credits are one
+  # shared pool. Resets at midnight.
+  dailyCap: 200
+  # Input is billed per token and a pasted document is the easiest way to
+  # spend a lot by accident.
+  maxQuestionChars: 2000
+  # The same risk from the other direction: a large tool result goes back
+  # into the prompt on the next step.
+  maxToolResultChars: 6000
+
 # Postgres. D-008: its own StatefulSet on the official image, separate
 # failure domain from the store's MariaDB, and able to back more than one
 # gateway replica later.

@@ -27,6 +27,19 @@ class Config:
     bootstrap_api_key: str
     upstream_timeout_seconds: float
     health_interval_seconds: float
+    # Chat agent. D-011. The API key is OPTIONAL on purpose: a gateway with
+    # no model key must still start, serve /mcp and serve the dashboard, with
+    # the Chat tab saying it is not configured. Making it required would mean
+    # a reviewer with no Anthropic account could not run the project at all.
+    llm_provider: str
+    llm_model: str
+    llm_api_key: str
+    llm_effort: str
+    chat_max_steps: int
+    chat_max_tokens: int
+    chat_daily_cap: int
+    chat_max_question_chars: int
+    chat_max_tool_result_chars: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -46,6 +59,15 @@ class Config:
             bootstrap_api_key=_req("BOOTSTRAP_API_KEY"),
             upstream_timeout_seconds=num("UPSTREAM_TIMEOUT_SECONDS", "8"),
             health_interval_seconds=num("HEALTH_INTERVAL_SECONDS", "30"),
+            llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").strip(),
+            llm_model=os.environ.get("LLM_MODEL", "claude-haiku-5-5").strip(),
+            llm_api_key=os.environ.get("LLM_API_KEY", "").strip(),
+            llm_effort=os.environ.get("LLM_EFFORT", "low").strip(),
+            chat_max_steps=int(num("CHAT_MAX_STEPS", "6")),
+            chat_max_tokens=int(num("CHAT_MAX_TOKENS", "1024")),
+            chat_daily_cap=int(num("CHAT_DAILY_CAP", "200")),
+            chat_max_question_chars=int(num("CHAT_MAX_QUESTION_CHARS", "2000")),
+            chat_max_tool_result_chars=int(num("CHAT_MAX_TOOL_RESULT_CHARS", "6000")),
         )
 
     def redacted(self) -> dict[str, str]:
@@ -59,4 +81,12 @@ class Config:
             "bootstrap_api_key": "<redacted>",
             "upstream_timeout_seconds": str(self.upstream_timeout_seconds),
             "health_interval_seconds": str(self.health_interval_seconds),
+            "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
+            # Presence only. The value never reaches a log line.
+            "llm_api_key": "<set>" if self.llm_api_key else "<unset>",
+            "llm_effort": self.llm_effort,
+            "chat_max_steps": str(self.chat_max_steps),
+            "chat_max_tokens": str(self.chat_max_tokens),
+            "chat_daily_cap": str(self.chat_daily_cap),
         }

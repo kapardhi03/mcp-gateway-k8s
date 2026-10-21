@@ -28,3 +28,12 @@ input,select{font:inherit;padding:.45rem .55rem;border:1px solid var(--line);bor
 .login h1{font-size:1.1rem;margin:0 0 1rem}
 .login input{width:100%;margin-bottom:.6rem}
 .login button{width:100%}
+
+/* Chat */
+.turn { border-top: 1px solid var(--line); padding: .8rem 0; }
+.turn .q { font-weight: 600; }
+.turn .a { margin-top: .4rem; white-space: pre-wrap; }
+.steps { margin: .4rem 0; padding-left: .6rem; border-left: 2px solid var(--line); }
+.step { font-size: .85rem; display: flex; gap: .6rem; align-items: baseline; }
+.step .mut { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28rem; }
+.tok { font-size: .8rem; margin-top: .3rem; }

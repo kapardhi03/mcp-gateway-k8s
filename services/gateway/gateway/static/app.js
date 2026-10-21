@@ -179,12 +179,15 @@ function Audit() {
     <h2>Audit log</h2>
     <${Err} e=${err} />
     <table><thead><tr>
-      <th>When</th><th>User</th><th>Server</th><th>Tool</th><th>ms</th><th>Outcome</th><th>Detail</th>
+      <th>When</th><th>User</th><th>Server</th><th>Tool</th><th>ms</th>
+      <th>Tokens</th><th>Outcome</th><th>Detail</th>
     </tr></thead><tbody>
       ${rows.map((a, i) => html`<tr key=${i}>
         <td class="mut">${a.ts.slice(0, 19).replace("T", " ")}</td>
         <td>${a.user}</td><td>${a.server || "—"}</td><td>${a.tool || "—"}</td>
         <td>${a.duration_ms}</td>
+        <td class="mut">${a.tokens_in != null
+          ? `${a.tokens_in}/${a.tokens_out ?? 0}` : "—"}</td>
         <td class=${a.outcome === "ok" ? "ok" : "bad"}>${a.outcome}</td>
         <td class="mut">${a.detail || ""}</td>
       </tr>`)}
@@ -192,12 +195,82 @@ function Audit() {
 }
 
 /* ------------------------------------------------------------ Chat */
+/* Every `style` here is an OBJECT. React requires that, and htm passes a
+   string straight through, so `style="margin-top:1rem"` renders the whole
+   dashboard as a blank page with React error #62. Caught only by opening a
+   real browser: every HTTP check passed while the page showed nothing. */
 function Chat() {
+  const [cfg, setCfg] = useState(null);
+  const [turns, setTurns] = useState([]);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const loadCfg = useCallback(async () => {
+    try { setCfg(await api("/chat/config")); } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { loadCfg(); }, [loadCfg]);
+
+  const ask = async (e) => {
+    e.preventDefault();
+    const question = q.trim();
+    if (!question || busy) return;
+    setBusy(true); setErr(null);
+    setTurns(t => [...t, { question, pending: true }]);
+    setQ("");
+    try {
+      const r = await api("/chat", { method: "POST", body: JSON.stringify({ question }) });
+      setTurns(t => t.map((x, i) => i === t.length - 1 ? { question, ...r } : x));
+      loadCfg();
+    } catch (e2) {
+      setErr(e2.message);
+      setTurns(t => t.map((x, i) => i === t.length - 1 ? { question, failed: e2.message } : x));
+      loadCfg();
+    } finally { setBusy(false); }
+  };
+
+  if (!cfg) return html`<h2>Chat</h2><${Err} e=${err} />`;
+  if (!cfg.configured) return html`
+    <h2>Chat</h2>
+    <div class="note">No model API key is configured, so the chat agent is switched off.
+    Everything else on this dashboard works. Create the Secret with
+    <code>scripts/dev-secrets.sh --llm</code> and restart the gateway.</div>`;
+
   return html`
     <h2>Chat</h2>
-    <div class="note">Not built yet. The chat agent is the next step: it will call tools
-    through this gateway as the signed-in user, show which tools it called, and every call
-    will appear in the Audit log above.</div>`;
+    <div class="note">
+      Asked as <b>you</b>. The agent reaches its tools through this gateway's own
+      <code>/mcp</code> with a key minted for you and deleted when the answer comes back,
+      so every tool call below is in the Audit log under your name.<br/>
+      <span class="mut">${cfg.model} · effort low · at most ${cfg.max_steps} tool steps per
+      question · ${cfg.used_today} of ${cfg.daily_cap} turns used today</span>
+    </div>
+    <${Err} e=${err} />
+    ${turns.map((t, i) => html`<div class="turn" key=${i}>
+      <div class="q">${t.question}</div>
+      ${t.pending ? html`<div class="mut">thinking…</div>` : null}
+      ${t.failed ? html`<div class="note err">${t.failed}</div>` : null}
+      ${(t.steps || []).length ? html`<div class="steps">
+        ${t.steps.map((s, j) => html`<div key=${j} class="step">
+          <code>${s.tool}</code>
+          <span class="mut">${JSON.stringify(s.input)}</span>
+          <span class=${s.outcome === "ok" ? "ok" : "bad"}>${s.outcome}</span>
+          <span class="mut">${s.duration_ms} ms</span>
+        </div>`)}
+      </div>` : null}
+      ${t.answer ? html`<div class="a">${t.answer}</div>` : null}
+      ${t.tokens ? html`<div class="mut tok">
+        ${t.tokens.in} in / ${t.tokens.out} out tokens${(t.steps || []).length
+          ? ` · ${t.steps.length} tool call${t.steps.length === 1 ? "" : "s"}` : " · no tools called"}
+      </div>` : null}
+    </div>`)}
+    <form class="row" onSubmit=${ask} style=${{ marginTop: "1rem" }}>
+      <input placeholder="e.g. what orders came in today?" value=${q}
+             maxLength=${cfg.max_question_chars}
+             onInput=${e => setQ(e.target.value)} />
+      <button class="act primary" type="submit" disabled=${busy}>
+        ${busy ? "Asking…" : "Ask"}</button>
+    </form>`;
 }
 
 /* ------------------------------------------------------------ shell */

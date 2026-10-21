@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
 -- Added after api_keys shipped without it, so it is a guarded ALTER rather
 -- than a column in the CREATE: an existing deployment already has the table.
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+-- The chat agent mints one of these per turn and deletes it again when the
+-- turn ends. expires_at is the backstop for the case where the process dies
+-- mid-turn: an orphaned key stops authenticating on its own.
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
 -- Every tool call, success or failure, from day one.
 CREATE TABLE IF NOT EXISTS audit (
@@ -90,6 +94,11 @@ CREATE TABLE IF NOT EXISTS audit (
     detail       TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_ts_idx ON audit (ts DESC);
+-- Chat turns carry their token cost. NULL for a plain tool call, which has
+-- no model behind it. Columns rather than JSON in `detail` so the daily cost
+-- is one SUM and the dashboard does not have to parse anything.
+ALTER TABLE audit ADD COLUMN IF NOT EXISTS tokens_in  INTEGER;
+ALTER TABLE audit ADD COLUMN IF NOT EXISTS tokens_out INTEGER;
 """
 
 
@@ -156,12 +165,16 @@ class Db:
 
     # ---------------- api keys ----------------
 
+    # A key is live only if it is neither revoked nor past its expiry. Both
+    # conditions live in this one predicate so no caller can forget either.
+    _LIVE = "revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
+
     async def find_key_by_prefix(self, prefix: str) -> tuple[str, str, str] | None:
         """Return (name, key_hash, role) for a live key, or None."""
         async with self._pool.connection() as c:
             row = await (await c.execute(
-                "SELECT name, key_hash, role FROM api_keys WHERE prefix=%s AND revoked_at IS NULL",
-                (prefix,))).fetchone()
+                "SELECT name, key_hash, role FROM api_keys "
+                "WHERE prefix=%s AND " + self._LIVE, (prefix,))).fetchone()
         return tuple(row) if row else None  # type: ignore[return-value]
 
     async def ensure_key(self, name: str, prefix: str, key_hash: str, role: str = "admin") -> None:
@@ -273,13 +286,24 @@ class Db:
     # ---------------- api keys, per user ----------------
 
     async def create_user_key(self, user_id: int, name: str, prefix: str,
-                              key_hash: str, role: str) -> int:
+                              key_hash: str, role: str, expires_at=None) -> int:
         async with self._pool.connection() as c:
             row = await (await c.execute(
-                """INSERT INTO api_keys (name, prefix, key_hash, role, user_id)
-                   VALUES (%s,%s,%s,%s,%s) RETURNING id""",
-                (name, prefix, key_hash, role, user_id))).fetchone()
+                """INSERT INTO api_keys (name, prefix, key_hash, role, user_id, expires_at)
+                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (name, prefix, key_hash, role, user_id, expires_at))).fetchone()
         return int(row[0])
+
+    async def delete_key_by_id(self, key_id: int) -> None:
+        """Remove a key row outright.
+
+        Only for the chat agent's per-turn key. A revoked row would be the
+        honest record for a key a person held, but nobody ever held this one:
+        it lives for one turn, and 200 turns a day would bury the real keys on
+        the dashboard. The audit rows it produced stay, attributed to the user.
+        """
+        async with self._pool.connection() as c:
+            await c.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
 
     async def list_keys_for_user(self, user_id: int) -> list[dict[str, Any]]:
         async with self._pool.connection() as c:
@@ -314,30 +338,55 @@ class Db:
         return cur.rowcount == 1
 
     async def find_key_with_user(self, prefix: str):
-        """(name, key_hash, role, user_email) for a live key."""
+        """(name, key_hash, role, user_email) for a live key.
+
+        The email is what the audit log is attributed to. Looking the key up
+        WITHOUT it, which is what `find_key_by_prefix` does, leaves the audit
+        row carrying the key's NAME: every user-created key defaults to the
+        name "default", so A's and B's calls were indistinguishable.
+        """
         async with self._pool.connection() as c:
             return await (await c.execute(
                 """SELECT k.name, k.key_hash, k.role, u.email
                    FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
-                   WHERE k.prefix=%s AND k.revoked_at IS NULL""", (prefix,))).fetchone()
+                   WHERE k.prefix=%s AND """ + self._LIVE, (prefix,))).fetchone()
 
     # ---------------- audit ----------------
 
     async def audit(self, user_name: str, server_slug: str | None, tool: str | None,
-                    duration_ms: int, outcome: str, detail: str | None = None) -> None:
+                    duration_ms: int, outcome: str, detail: str | None = None,
+                    tokens_in: int | None = None, tokens_out: int | None = None) -> None:
         async with self._pool.connection() as c:
             await c.execute(
-                """INSERT INTO audit (user_name, server_slug, tool, duration_ms, outcome, detail)
-                   VALUES (%s,%s,%s,%s,%s,%s)""",
-                (user_name, server_slug, tool, duration_ms, outcome, detail))
+                """INSERT INTO audit (user_name, server_slug, tool, duration_ms,
+                                      outcome, detail, tokens_in, tokens_out)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (user_name, server_slug, tool, duration_ms, outcome, detail,
+                 tokens_in, tokens_out))
+
+    async def chat_turns_today(self) -> int:
+        """Chat turns since local midnight, counted across ALL users.
+
+        The cap protects one shared pool of API credits, so it is global by
+        design, not per user. Every turn that reached the model is counted,
+        failures included: a failed turn can still have been billed.
+        """
+        async with self._pool.connection() as c:
+            row = await (await c.execute(
+                """SELECT count(*) FROM audit
+                   WHERE server_slug='chat' AND tool='turn'
+                     AND ts >= date_trunc('day', now())""")).fetchone()
+        return int(row[0])
 
     async def recent_audit(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self._pool.connection() as c:
             rows = await (await c.execute(
-                """SELECT ts, user_name, server_slug, tool, duration_ms, outcome, detail
+                """SELECT ts, user_name, server_slug, tool, duration_ms, outcome, detail,
+                          tokens_in, tokens_out
                    FROM audit ORDER BY ts DESC LIMIT %s""", (limit,))).fetchall()
         return [
             {"ts": r[0].isoformat(), "user": r[1], "server": r[2], "tool": r[3],
-             "duration_ms": r[4], "outcome": r[5], "detail": r[6]}
+             "duration_ms": r[4], "outcome": r[5], "detail": r[6],
+             "tokens_in": r[7], "tokens_out": r[8]}
             for r in rows
         ]
