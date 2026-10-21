@@ -64,6 +64,10 @@ def test_create_product_posts_expected_body():
     seen = {}
 
     def h(req):
+        # create_product also reads the store currency so the returned
+        # summary can label its price. That is a GET; only record the POST.
+        if urlparse(str(req.url)).path.endswith("/settings/general"):
+            return httpx.Response(200, json=[{"id": "woocommerce_currency", "value": "USD"}])
         seen["body"] = req.content.decode()
         seen["method"] = req.method
         return httpx.Response(201, json={"id": 99, "name": "New", "price": "1.50",
@@ -74,6 +78,7 @@ def test_create_product_posts_expected_body():
     assert '"type": "simple"' in seen["body"]
     assert '"status": "publish"' in seen["body"]
     assert out["id"] == 99
+    assert out["currency"] == "USD"
 
 
 @pytest.mark.parametrize("price", ["abc", "-1", ""])
@@ -96,13 +101,20 @@ def test_list_orders_today_uses_store_timezone_not_utc():
 
     The store here is Asia/Kolkata (UTC+5:30). The UTC window for that local
     day must therefore start at 18:30 the previous day, not at 00:00 UTC.
+
+    The zone is mocked on the REST API index at /wp-json/, which is where
+    WordPress actually publishes it. This test used to mock it on
+    system_status's environment.default_timezone, which is PHP's process
+    timezone and is always UTC on a real site, so the test agreed with the
+    bug it was meant to catch. See tests/test_store_settings.py.
     """
     seen = {}
 
     def h(req):
         path = urlparse(str(req.url)).path
-        if path.endswith("/system_status"):
-            return httpx.Response(200, json={"environment": {"default_timezone": "Asia/Kolkata"}})
+        if path == "/wp-json/":
+            return httpx.Response(200, json={"timezone_string": "Asia/Kolkata",
+                                             "gmt_offset": 5.5})
         seen["q"] = q(req)
         return httpx.Response(200, json=[])
 
@@ -115,8 +127,8 @@ def test_list_orders_today_uses_store_timezone_not_utc():
 def test_list_orders_utc_store_uses_midnight_utc():
     def h(req):
         path = urlparse(str(req.url)).path
-        if path.endswith("/system_status"):
-            return httpx.Response(200, json={"environment": {"default_timezone": "UTC"}})
+        if path == "/wp-json/":
+            return httpx.Response(200, json={"timezone_string": "UTC", "gmt_offset": 0})
         h.q = q(req)
         return httpx.Response(200, json=[])
 
@@ -128,8 +140,8 @@ def test_list_orders_utc_store_uses_midnight_utc():
 
 def test_list_orders_rejects_bad_date():
     def h(req):
-        if urlparse(str(req.url)).path.endswith("/system_status"):
-            return httpx.Response(200, json={"environment": {"default_timezone": "UTC"}})
+        if urlparse(str(req.url)).path == "/wp-json/":
+            return httpx.Response(200, json={"timezone_string": "UTC", "gmt_offset": 0})
         return httpx.Response(200, json=[])
     mount(h)
     with pytest.raises(ToolError):
@@ -284,8 +296,9 @@ def test_today_uses_store_timezone_at_a_boundary_instant(monkeypatch):
 
     def h(req):
         from urllib.parse import urlparse as up
-        if up(str(req.url)).path.endswith("/system_status"):
-            return httpx.Response(200, json={"environment": {"default_timezone": "Asia/Kolkata"}})
+        if up(str(req.url)).path == "/wp-json/":
+            return httpx.Response(200, json={"timezone_string": "Asia/Kolkata",
+                                             "gmt_offset": 5.5})
         seen.update(q(req))
         return httpx.Response(200, json=[])
 

@@ -116,8 +116,15 @@ def _day_bounds(tz_name: str, day: str | None) -> tuple[str, str]:
     )
 
 
-def _product_summary(p: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _product_summary(p: dict[str, Any], currency: str = "") -> dict[str, Any]:
+    """One product, with its currency.
+
+    The WooCommerce products endpoint returns `price` as a bare string and no
+    currency anywhere in the payload. An order payload carries its own
+    currency; a product does not. Leaving it out meant the chat agent had to
+    guess, and it said so in its answer.
+    """
+    out = {
         "id": p.get("id"),
         "name": p.get("name"),
         "sku": p.get("sku"),
@@ -125,6 +132,9 @@ def _product_summary(p: dict[str, Any]) -> dict[str, Any]:
         "status": p.get("status"),
         "permalink": p.get("permalink"),
     }
+    if currency:
+        out["currency"] = currency
+    return out
 
 
 def _order_summary(o: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +167,9 @@ def list_products(search: str | None = None, per_page: int = 20) -> list[dict[st
     q: dict[str, str] = {"per_page": str(per_page)}
     if search:
         q["search"] = search
-    return [_product_summary(p) for p in client().get("/wp-json/wc/v3/products", q)]
+    c = client()
+    return [_product_summary(p, c.store_currency())
+            for p in c.get("/wp-json/wc/v3/products", q)]
 
 
 @mcp.tool()
@@ -195,7 +207,8 @@ def create_product(
         body["sku"] = sku
     if description:
         body["description"] = description
-    return _product_summary(client().post("/wp-json/wc/v3/products", body))
+    c = client()
+    return _product_summary(c.post("/wp-json/wc/v3/products", body), c.store_currency())
 
 
 @mcp.tool()

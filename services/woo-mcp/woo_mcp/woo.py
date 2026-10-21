@@ -8,6 +8,7 @@ timeout is mandatory and comes from config.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -15,6 +16,10 @@ import httpx2 as httpx
 
 from .config import Config
 from .oauth import sign
+
+
+# Store settings are read on hot paths and change about never.
+SETTINGS_TTL = 300.0
 
 
 class WooError(RuntimeError):
@@ -26,6 +31,19 @@ class WooClient:
         self._c = config
         # `transport` exists so tests can inject a mock without a network.
         self._transport = transport
+        # Store settings change about never and are read on every date-bounded
+        # orders call. system_status in particular is one of the heaviest
+        # endpoints WooCommerce has: it enumerates plugins, theme, database
+        # tables and more. Cache it.
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    def _cached(self, key: str, produce: Any, ttl: float = SETTINGS_TTL) -> Any:
+        hit = self._cache.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl:
+            return hit[1]
+        value = produce()
+        self._cache[key] = (time.monotonic(), value)
+        return value
 
     # ---------- internals ----------
 
@@ -96,15 +114,86 @@ class WooClient:
     def put(self, path: str, body: dict[str, Any]) -> Any:
         return self._request("PUT", path, body=body)
 
-    def store_timezone(self) -> str:
-        """The store's timezone name, read from WooCommerce, not assumed.
+    def store_currency(self) -> str:
+        """The store's currency code, read from WooCommerce, not assumed.
 
-        'Today' must mean today in the store's timezone, not UTC. Falls back to
-        UTC only if WooCommerce does not report one, and says so in the value.
+        Product prices come back from the REST API as bare strings with no
+        currency anywhere in the payload. The chat agent noticed: asked for
+        the cheapest product in euros it answered correctly but had to add
+        "I assumed the store currency is USD, since the tools didn't state
+        it". A price without its currency is an incomplete answer, and a
+        model left to guess one will eventually guess wrong.
+
+        Orders are unaffected: an order payload carries its own currency.
+
+        Read from /wc/v3/settings/general rather than system_status, which
+        also carries it but costs far more to produce.
         """
-        try:
-            status = self.get("/wp-json/wc/v3/system_status")
-        except WooError:
-            return "UTC"
-        env = status.get("environment") or {}
-        return env.get("default_timezone") or "UTC"
+        def produce() -> str:
+            try:
+                rows = self.get("/wp-json/wc/v3/settings/general")
+            except WooError:
+                return ""
+            if not isinstance(rows, list):
+                return ""
+            for row in rows:
+                if isinstance(row, dict) and row.get("id") == "woocommerce_currency":
+                    return str(row.get("value") or "")
+            return ""
+
+        return self._cached("currency", produce)
+
+    def store_timezone(self) -> str:
+        """The store's timezone name, read from WordPress, not assumed.
+
+        'Today' must mean today in the store's timezone, not UTC.
+
+        Read from the REST API index at /wp-json/, which exposes
+        `timezone_string` and `gmt_offset`. That endpoint needs no
+        authentication and is cheap.
+
+        NOT from system_status's `environment.default_timezone`, which is
+        what this method used until 2026-10-20 and is the WRONG field: it
+        reports PHP's process timezone, and WordPress forces that to UTC on
+        every request while keeping the site timezone separately. So this
+        returned "UTC" for a store set to Asia/Kolkata, and `_day_bounds`
+        resolved "today" in UTC while the requirements trace claimed the
+        store's zone.
+
+        It hid because IST is UTC+5:30: the two zones only disagree about
+        which day it is between 18:30 and midnight IST, and every test had
+        run in the afternoon. Same shape as the gmt_offset Job failure: a
+        thing that looks like it works.
+
+        A site can be configured with a raw UTC offset and no named zone, in
+        which case `timezone_string` is empty and `gmt_offset` is the only
+        answer; a fixed-offset zone is built from it.
+        """
+        def produce() -> str:
+            try:
+                index = self.get("/wp-json/")
+            except WooError:
+                return "UTC"
+            if not isinstance(index, dict):
+                return "UTC"
+            name = str(index.get("timezone_string") or "").strip()
+            if name:
+                return name
+            offset = index.get("gmt_offset")
+            if offset is None:
+                return "UTC"
+            try:
+                hours = float(offset)
+            except (TypeError, ValueError):
+                return "UTC"
+            # ZoneInfo cannot take an offset, but "UTC+05:30" style is not a
+            # zone name either. Return the sign-flipped Etc/GMT form, which
+            # IS a real zone: Etc/GMT-5 is UTC+5. Whole hours only, so a
+            # half-hour offset with no named zone falls back to UTC rather
+            # than silently rounding.
+            if hours != int(hours):
+                return "UTC"
+            sign = "-" if hours > 0 else "+"
+            return "Etc/GMT%s%d" % (sign, abs(int(hours)))
+
+        return self._cached("timezone", produce)
