@@ -24,7 +24,7 @@ died on `wp option update gmt_offset`.
 | DOD-07 | User B: one prompt uses tools from two different upstream servers | Pre-registered 2026-10-18. One natural-language prompt from B causes calls to both `woo__*` and `fx__*` in the same answer, with the model choosing both unaided. Already evidenced for a bootstrap key in GW-4; this repeats it as user B. | | | todo |
 | DOD-08 | Revoke B's key, next call rejected | Pre-registered 2026-10-18. An admin revokes B's key in the dashboard. B's very next call returns 401 and reaches no upstream. The rejection is audited. A's key keeps working, so revocation is per-key and not a global break. | | | todo |
 | DOD-09 | Disable one upstream, its tools disappear from chat agent and external client | Pre-registered 2026-10-18. An admin disables fx in the dashboard. Its tools vanish from both the external client's `tools/list` and the chat agent's tool set, within the refresh window. The fx pod keeps running: this is a registry flag, not a scaling action. Re-enabling restores them. | | | todo |
-| DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | Pre-registered 2026-10-18. `kubectl delete pod` on woo-mcp. `tools/list` still returns the fx tools within the per-upstream timeout, the chat agent still answers an fx question, and the dashboard's Servers page shows woo as `Unreachable` with a reason. Recovery is automatic once the pod is back. | | | todo |
+| DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | Pre-registered 2026-10-18. `kubectl delete pod` on woo-mcp. `tools/list` still returns the fx tools within the per-upstream timeout, the chat agent still answers an fx question, and the dashboard's Servers page shows woo as `Unreachable` with a reason. Recovery is automatic once the pod is back. | 2026-10-22. **The pre-registered method did not produce the evidence and was replaced.** `kubectl delete pod` was run by Kapardhi; the replacement pod was `Running` in under 4 seconds, so the gateway never observed a degraded state and there was nothing to see. A `kubectl delete pod` on a single-replica Deployment is not a sustained outage. Redone by scaling the Deployment to 0, which holds the failure open: Endpoints emptied, then `woo Unreachable err=ConnectError tools=0` while `fx Connected tools=2` throughout. An external `tools/list` returned exactly the 2 fx tools. The chat agent answered "What is 100 US dollars in Japanese yen?" from `fx__convert` during the outage, and asked "How many products are in the store?" it answered "My tools only cover currency exchange rates and conversions" and called nothing, rather than inventing a figure. Scaled back to 1 with no other action: woo returned to `Connected`, 5 tools, 7 in `tools/list`. See the note below on dashboard lag. | pass |
 | DOD-11 | Every call above in audit log, attributed to the right user | Pre-registered 2026-10-18. Every call made in DOD-03 to DOD-10 has an audit row carrying user, server, tool, timestamp, duration_ms and outcome, visible on the dashboard's Audit page. A's calls say A, B's say B. Chat turns additionally carry input and output token counts. Failures and rejections appear with failure outcomes, not silently. | | | todo |
 
 ## Security checks (SEC)
@@ -339,6 +339,27 @@ under both the correct and the incorrect implementation is not evidence, however
 **DOD-04 needs an order placed between 00:00 and 05:30 IST**, asked about later the same IST day.
 Any other order is still a valid test that date filtering works, but it says nothing about the
 timezone.
+
+## Finding: the Servers page lags the served tool list by one refresh
+
+Seen while evidencing DOD-10, in both directions:
+
+| | `/admin/upstreams` (the Servers page) | `tools/list` (what clients get) |
+|---|---|---|
+| Just after woo went down | `Connected`, 5 tools | already only the 2 fx tools |
+| Just after woo came back | `Unreachable`, ConnectError | already all 7 tools |
+
+**Cause.** `/admin/upstreams` reads the `status` column, which the last refresh wrote. `/mcp`
+refreshes first, in the auth middleware, and then serves. So the page can be up to one refresh
+cycle stale while the tool list is current. Nothing is wrong with what clients receive; the page
+is the thing that lags.
+
+**Why it matters anyway.** It is a demo. A reviewer who kills a pod and sees the dashboard still
+saying `Connected`, or sees `Unreachable` next to tools that plainly work, will read it as a bug
+whatever the explanation. The fix is one line, `await gw.refresh()` at the top of the handler,
+paid for by one fan-out per page load. **Not done: this is a behaviour change and it is
+Kapardhi's call**, and the honest alternative is to leave it and explain it, since a status page
+that is explicitly a cached last-known-state is a defensible design.
 
 ## Third upstream: GitHub remote MCP (GH-1 to GH-4)
 
