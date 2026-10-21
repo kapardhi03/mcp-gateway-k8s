@@ -271,6 +271,69 @@ pre-registered row, so it is recorded rather than built.
    session manager's task group never started and every MCP request died with `Task group is not
    initialized`. The FastAPI lifespan now enters `session_manager.run()` explicitly.
 
+## Chat agent build (CA-1 to CA-9)
+
+**Honest about ordering.** Unlike the SEC and DOD tables, most of these rows were written as the
+agent was built, not before it. They are implementation evidence. The pre-registered gate is
+DOD-03 to DOD-11 above, which is unchanged and still mostly `todo`, because it needs Kapardhi in a
+browser as user A and user B. CA-9 is the only row below that was written before it was run, and
+it is the one that needs him.
+
+| # | Check | Expected | Actual | Result |
+|---|---|---|---|---|
+| CA-1 | The agent reaches tools the same way an external client does | The agent is an MCP client of the gateway's own `/mcp`, not an internal shortcut, so it sees the same prefixed tool names and the same registry. | Verified: it connects over loopback HTTP to `/mcp` with `Authorization: Bearer`, and the tools it called are `woo__list_orders`, `woo__list_products`, `fx__convert`, the same public names Claude Code sees in GW-2. | pass |
+| CA-2 | Audit rows name the person, not the key | A tool call made through the chat agent is attributed to the signed-in user's email. | **Found a bug doing this.** `_authenticate` used `find_key_by_prefix`, which returns the key's *name*, and every key created in the dashboard is named "default" unless renamed, so A's and B's calls were both audited as "default". Fixed to resolve the owning user's email, with the key name kept only for the ownerless bootstrap key. After the fix one turn as A produced two rows, both `a@example.com`. Without this fix DOD-06 and DOD-11 could not have been honestly passed. | pass |
+| CA-3 | The per-turn key does not outlive the turn | A short-lived key is minted per turn and is gone afterwards, leaving no clutter and no standing credential. | The key row is deleted in a `finally`, with a 5-minute `expires_at` as the backstop for a process that dies mid-turn. After two turns, `GET /me/keys` for A shows only her two real keys and no `chat-session` entry. Key lookup now also excludes expired keys, in one shared SQL predicate so no caller can forget it. | pass |
+| CA-4 | Tokens per turn are recorded | Input and output token counts land in the audit log per chat turn, and are absent for a plain tool call, which has no model behind it. | `tokens_in` and `tokens_out` are columns on `audit`, not JSON inside `detail`. Turn one: 4438 in, 137 out. The `woo`/`list_orders` row from the same turn has both as NULL, which is correct. | pass |
+| CA-5 | Cost per question, measured | Replaces the $0.004 estimate in D-011 with a measured figure. | 4438 input + 137 output on `claude-haiku-5-5` at $0.10/$0.50 per MTok is **about $0.0005 a question**, eight times cheaper than estimated. A second, two-tool question cost 7290 in / 389 out, about $0.0009. The 200-turn daily cap is therefore roughly $0.10 a day at worst. | pass |
+| CA-6 | Credit guards refuse what they should | Over-long question, empty question, cross-origin POST and no session are each refused, and a refusal costs no tokens. | 2001 characters -> 400 with the limit named; `"   "` -> 400; `Origin: http://evil.example` with a valid cookie -> 403; no cookie -> 401. All four are refused before the model is called, so none of them spends anything. | pass |
+| CA-7 | One prompt, two upstream servers, chosen by the model | A natural question causes calls to both `woo__*` and `fx__*` with no hint about which tools to use. | "List the products in the store and tell me what the cheapest one costs in euros." called `woo__list_products` then `fx__convert`, unaided. This is DOD-07's shape through the dashboard agent rather than through Claude Code. | pass |
+| CA-8 | The agent does not invent what the tools did not say | If a tool omits something the answer needs, the agent says so rather than quietly assuming. | **The agent caught a real gap.** Asked for a price in euros it answered correctly and added "I assumed the store currency is USD, since the tools didn't state it". It was right: the WooCommerce products endpoint returns `price` as a bare string with no currency. Products now carry `currency`, read from `/wc/v3/settings/general`. Orders were never affected. | pass |
+| CA-9 | The Chat tab works in a real browser | Pre-registered. Signed in as A, the Chat tab renders, a question returns an answer, the tool calls appear under it with names and timings, and the token count is shown. As B, the same question works and B's rows in the Audit tab say B. | Needs Kapardhi. Only an HTTP-level check has been done. Step 3 is the reason this row exists at all: the dashboard passed every HTTP check while rendering a completely blank page. | todo |
+
+## Correction: what the store-timezone bug means for two rows already marked pass
+
+Found 2026-10-22, while adding the store currency. `store_timezone()` read
+`environment.default_timezone` from WooCommerce's `system_status`. That field is PHP's *process*
+timezone, which WordPress forces to UTC on every request while keeping the site timezone in a
+separate option. So it returned `"UTC"` for a store set to `Asia/Kolkata`, and `_day_bounds`
+resolved "today" in UTC for the whole life of the project so far. Fixed to read `/wp-json/`, which
+publishes `timezone_string`; verified live afterwards as `Asia/Kolkata`.
+
+Two rows cited the store timezone as the reason they passed. Neither result was wrong, but the
+reason given was:
+
+- **VWM-4** said "With the store timezone set, `date=today` returns order 13". Order 13 was placed
+  at 02:22 UTC on 17 October, which falls inside *both* the UTC window for the 17th and the
+  Asia/Kolkata window. The check could not have told the two apart, so it was not evidence about
+  the timezone. It remains valid evidence that date filtering works.
+- **GW-2** said it "confirmed the store-timezone bounds excluded yesterday's order 12". Order 12
+  was 15:37 UTC on the 16th, which is excluded by the UTC window for the 17th as well. Same
+  problem: a true observation, attributed to the wrong cause.
+
+Both rows keep their `pass`, with this note attached. The timezone claim itself is now carried by
+`services/woo-mcp/tests/test_store_settings.py`, which pins the behaviour at 23:00 IST, the one
+window in which UTC and IST disagree about the date and therefore the only window in which the bug
+was ever visible. Proved by mutation: restoring the `system_status` read fails 4 of its 12 tests.
+
+**The lesson, which is the same one `scripts/check-cluster.sh` exists for.** A check that passes
+under both the correct and the incorrect implementation is not evidence, however green it looks.
+Both of these ran in the afternoon, when the two timezones agree. DOD-04 must be run in the
+evening IST, or with an order placed between 18:30 and midnight IST, for it to mean anything.
+
+## Third upstream: GitHub remote MCP (GH-1 to GH-4)
+
+**Pre-registered 2026-10-22, before any of it exists and before the PAT is created.** See D-023.
+The credential is a fine-grained PAT that Kapardhi creates himself, scoped to one repository with
+Issues read and write. Claude creates no token.
+
+| # | Check | Expected (written first) | Actual | Result |
+|---|---|---|---|---|
+| GH-1 | A credential typed into the dashboard is never returned by anything | The PAT is entered once in the Add Server form. After that it appears in no API response, no page source and no log line. Canary grep across every dashboard endpoint, the gateway log and the Postgres log, the same method as SEC-7, including SEC-7's own lesson: assert HTTP 200 and a non-empty body before counting a zero. Expected 0 hits everywhere, with a control grep proving the pattern machinery works. | | todo |
+| GH-2 | The PAT is encrypted at rest | The `upstreams` row holds only ciphertext. Grepping the Postgres data for the PAT returns 0 hits, and the stored value decrypts back to the original with the gateway's key, so the grep was looking for something genuinely present. | | todo |
+| GH-3 | GitHub's tools appear for user A's chat agent | After the server is added and enabled, A asks a question in the dashboard Chat tab that needs GitHub, and the agent calls a `github__*` tool. The tools appear without restarting the gateway, because the registry refresh is what publishes them. | | todo |
+| GH-4 | The same tools appear for user B's external client | B's Claude Code, configured with only the gateway URL and B's own key, lists the `github__*` tools alongside `woo__*` and `fx__*`. B's config contains no GitHub URL and no PAT. This is the whole point of the gateway: B gets access to a credentialled upstream without ever holding the credential. | | todo |
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
@@ -330,10 +393,10 @@ pre-registered row, so it is recorded rather than built.
 
 | ID | Requirement | Implemented in | Evidence | Status |
 |---|---|---|---|---|
-| C-01 | Uses an LLM to call tools through the gateway (D-011) | | | todo |
-| C-02 | Shows which tools it called | | | todo |
-| C-03 | Acts as logged-in user, audited under that user (D-014) | | | todo |
-| C-04 | LLM key in a Secret | | | todo |
+| C-01 | Uses an LLM to call tools through the gateway (D-011) | `services/gateway/gateway/chat.py`, `llm.py` | Claude Haiku 5.5. Verified 2026-10-22: "What orders came in today?" called `woo__list_orders` with `date="today"` and answered from the result. The agent is an MCP client of the gateway's own `/mcp`, so it uses the same endpoint, prefixes and timeouts as Claude Code. See CA-1 to CA-9. | pass |
+| C-02 | Shows which tools it called | `static/app.js` Chat tab | Each turn returns `steps[]` with tool name, arguments, duration and outcome, rendered under the question. Verified in the response body; the browser render is CA-9 and needs Kapardhi. | partial |
+| C-03 | Acts as logged-in user, audited under that user (D-014) | `chat.py`, `app.py` `_authenticate` | Verified 2026-10-22: one turn as A produced two audit rows, both `a@example.com`, one `woo`/`list_orders` and one `chat`/`turn`. This required fixing audit attribution, which had been recording the key's name: see CA-2. | pass |
+| C-04 | LLM key in a Secret | `charts/gateway` `llm.existingSecret` | Secret `llm-api`, key `anthropic-api-key`, mounted with `optional: true`. Confirmed present and non-empty without printing it: 144 base64 characters. Startup log shows `'llm_api_key': '<set>'`. Never in a values file, an image layer or a log line. | pass |
 
 ## Release deliverables
 
@@ -350,3 +413,4 @@ pre-registered row, so it is recorded rather than built.
 | S-08 | List of stretch goals attempted | | todo |
 | S-09 | Demo video covering all 6 required sections | | todo |
 | S-10 | Released: repo public, demo video posted | | todo |
+| S-11 | Demo accounts are fresh, and the ones whose passwords are in a transcript are deleted | Before recording S-09. Users `a@example.com` and `b@example.com` were created during step 2 with passwords that appear in a session transcript, so they are test accounts and not demo accounts. Create A and B again with passwords Kapardhi chooses, through the invite flow so no password is ever typed by Claude or echoed anywhere, then delete the originals. The rotation scripts cover the WordPress admin and the gateway bootstrap key; this row covers the two dashboard users, which they do not. | todo |

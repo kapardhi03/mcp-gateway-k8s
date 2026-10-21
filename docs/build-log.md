@@ -290,3 +290,85 @@ exposure is nil today, but it must be rotated before the gateway gets a public I
 
 **Next.** Rotate the bootstrap key, then the dashboard and chat agent (C-01 to C-04), which are
 what DOD-03 and DOD-04 still need. The gateway's VPS deploy also remains.
+
+## 2026-10-22: chat agent (step 4), and a timezone bug that had been passing its tests
+
+**Proposed by Claude, accepted by Kapardhi.** The chat agent's shape: it runs server side and
+reaches its tools through the gateway's **own** `/mcp` endpoint over loopback HTTP, using a
+short-lived API key minted for the signed-in user and deleted when the turn ends. The alternative
+was to call the tool functions in-process, which is simpler and worse: it would create a second,
+privileged path that nothing else in the demo uses, and a bug in it would be invisible to every
+other check. As built, the agent is literally another MCP client, identical to Claude Code in
+GW-2, so disabling an upstream removes its tools from the agent for free and the audit rows are
+produced by the ordinary middleware rather than asserted by the agent.
+
+**Decided by Kapardhi.** D-022, TLS on the VPS: a DuckDNS hostname with cert-manager and Let's
+Encrypt over HTTP-01, staging issuer first. D-023, the third upstream: GitHub's remote MCP server
+with a fine-grained PAT he creates himself, scoped to one repository with Issues read and write.
+
+**Verified before building, as required.**
+- The Anthropic Messages API tool-use shape, from the live docs, not from memory: headers, the
+  `tools` array, `tool_use` and `tool_result` block field names, and `stop_reason: "tool_use"`.
+  Two cost-relevant settings came out of it: `output_config.effort` is a top-level field and not
+  part of `thinking`, and `disable_parallel_tool_use` is what makes a six-step cap mean six calls
+  rather than six rounds of fan-out.
+- **Does GitHub's remote MCP server need Copilot access for a personal account?** No, with a PAT.
+  GitHub's own docs: "The GitHub MCP server is available to all GitHub users regardless of plan
+  type." Only tools behind a paid feature, such as the Copilot cloud agent, need the licence. The
+  fallback third server is therefore not needed. Recorded in D-023 with sources, along with a
+  cost finding: the default toolset would inflate every chat turn's prompt, and the server offers
+  per-toolset URLs (`/x/issues`, with an optional `/readonly`) to avoid that. Left open for
+  Kapardhi rather than chosen.
+- **Does DuckDNS resolve sub-subdomains?** Yes. Seven existing names, seven identical A records
+  for `store.<name>.duckdns.org`, creating nothing. The control is the part that makes it
+  evidence: a name nobody owns resolves to nothing, so DuckDNS is not just answering everything.
+
+**Measured, replacing an estimate.** A chat turn costs about $0.0005 on Haiku 5.5: 4438 input and
+137 output tokens for "What orders came in today?". D-011 estimated $0.004. The 200-turn daily cap
+is therefore about $0.10 a day at its worst.
+
+**AI errors caught.**
+- **`store_timezone()` read the wrong field, and had been doing so all along.** It took
+  `environment.default_timezone` from WooCommerce's `system_status`. That is PHP's *process*
+  timezone, which WordPress forces to UTC on every request while keeping the site timezone in a
+  separate option. A store set to Asia/Kolkata therefore reported `UTC`, and `_day_bounds`
+  resolved "today" in UTC for the whole project so far. The right source is the REST index at
+  `/wp-json/`, which publishes `timezone_string`, needs no authentication, and is far cheaper than
+  `system_status`.
+
+  The part worth keeping: **the two existing tests that claimed to cover this agreed with the
+  bug.** Both mocked `system_status` returning `default_timezone: "Asia/Kolkata"`, a payload no
+  real WordPress produces. And two trace rows already marked `pass`, VWM-4 and GW-2, cited the
+  store timezone as the reason they passed, when the orders involved fell inside both the UTC and
+  the IST window and so could not distinguish them. The results were right; the stated reason was
+  not. Both rows keep their pass with a correction attached.
+
+  It hid because IST is UTC+5:30, so the two zones only disagree about the date between 18:30 and
+  midnight IST, and every run had been in the afternoon. This is the same shape as the gmt_offset
+  Job failure: a check that passes under both the correct and the incorrect implementation is not
+  evidence, however green it is. The replacement test freezes 23:00 IST, the only window where
+  the bug was visible, and was proved by mutation.
+- **Audit attribution named the key, not the person.** `_authenticate` returned the API key's
+  name, and every key created in the dashboard is named "default" unless renamed, so user A's and
+  user B's tool calls were both audited as "default". Found while wiring the agent, because the
+  agent's whole claim is that it acts as the signed-in user. DOD-06 and DOD-11 ask who made each
+  call; without this fix neither could have been honestly passed.
+- **The image was built without the registry prefix.** `gateway:0.4.0` imported into k3d while the
+  chart asks for `ghcr.io/kapardhi03/gateway:0.4.0`, so the pod sat in `ErrImagePull` next to a
+  perfectly healthy old one. Harmless, and a reminder that `--wait` failing is the only reason it
+  was noticed at all.
+- **A command was written that would have printed part of the LLM API key.** Checking the Secret
+  was non-empty, the obvious shell pipeline ended in `cut -c1-7` to show the key's shape. The
+  tooling refused it. The check it was replaced with reports the base64 length only, which answers
+  the same question without materialising any of the value.
+
+**The agent found a gap in our own tool.** Asked for the cheapest product in euros it answered
+correctly and added, unprompted, "I assumed the store currency is USD, since the tools didn't
+state it". It was right: the WooCommerce products endpoint returns `price` as a bare string with
+no currency anywhere in the payload. Products now carry `currency`. Orders were never affected,
+because an order payload carries its own.
+
+**Next.** DOD-03 to DOD-11 and CA-9 need Kapardhi in a browser as user A and user B, and DOD-04
+needs an order placed between 18:30 and midnight IST for the timezone to mean anything. Then the
+VPS: rotate the bootstrap key, deploy the gateway, and build D-022 and D-023 once the DuckDNS name
+and the PAT exist.

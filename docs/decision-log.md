@@ -882,12 +882,117 @@ sentence to write is that the session cookie is sent without `Secure`, so anyone
 path can read it and resume the session, and that this is accepted for a demo and would not be
 accepted in production.
 
-**Kapardhi's choice:** _TODO Kapardhi_
+**Kapardhi's choice:** B. A DuckDNS hostname, with cert-manager and Let's Encrypt over HTTP-01.
+Staging issuer first, then production.
 
-**Kapardhi's reason (own words):** _TODO Kapardhi_
+**Kapardhi's reason (own words):** "On the PSL, so our own rate-limit bucket; free; values-only
+change." (AI-drafted, accepted by Kapardhi)
 
-**"Why not X?" asked and answer:** _TODO Kapardhi_
+**"Why not X?" asked and answer:** Not asked separately. A was rejected on the measured rate-limit
+risk above, C on cost, D because it leaves the session cookie in clear.
 
-**What would change my mind:** _TODO Kapardhi_
+**What would change my mind:** DuckDNS turning out not to resolve the sub-subdomains the two
+public hosts need, or going down. Neither applies: see the verification below. If it did, the
+fallback is D plus the threat-model sentence. (AI-drafted, accepted by Kapardhi)
 
-**Status:** open, needs Kapardhi's words. Nothing built.
+**Status:** decided. Nothing built: waiting on Kapardhi's DuckDNS name.
+
+**Verified after deciding (2026-10-22): DuckDNS resolves sub-subdomains to the owner's IP.**
+
+This had to be checked, because the plan needs `store.<name>.duckdns.org` and
+`gateway.<name>.duckdns.org`, and DuckDNS's own signup only ever gives you `<name>.duckdns.org`.
+If sub-subdomains did not resolve, option B would need two separate DuckDNS names instead of one,
+or a different provider.
+
+Tested against seven names that already exist, owned by strangers, creating nothing:
+
+| Name | `<name>.duckdns.org` | `store.<name>.duckdns.org` |
+|---|---|---|
+| test | 87.67.8.100 | 87.67.8.100 |
+| demo | 154.66.171.53 | 154.66.171.53 |
+| home | 127.0.0.1 | 127.0.0.1 |
+| nas | 223.197.243.124 | 223.197.243.124 |
+| plex | 216.41.165.36 | 216.41.165.36 |
+| server | 192.169.69.26 | 192.169.69.26 |
+| openhab | 83.149.148.26 | 83.149.148.26 |
+
+Seven for seven, identical A records. The control matters as much as the result: a name nobody
+owns, `zz-no-such-name-9x7q.duckdns.org`, returns no record at all. So DuckDNS is not simply
+answering everything with a default. The wildcard is per registered name, which is exactly the
+behaviour the plan needs, and one DuckDNS name covers both public hosts.
+
+One consequence to remember when building: one DuckDNS name is **one** registered domain for
+Let's Encrypt's purposes, so both hosts draw on the same 50-certificates-per-week bucket. That is
+fine, since nobody else is in it, but it is also why the staging issuer goes first. Staging has
+its own much higher limits, so a misconfiguration costs nothing. Only once a staging certificate
+is issued end to end does the issuer move to production.
+
+
+## D-023: the third upstream MCP server
+
+**Why this exists.** The requirements ask for at least three upstream MCP servers: the
+WooCommerce one written here, plus two others. There are two today, `woo` and `fx`, so one more is
+needed. See D-010 for how the first two were chosen.
+
+**Options.**
+
+- **A. GitHub's official remote MCP server** at `https://api.githubcopilot.com/mcp/`. Real,
+  third-party, remotely hosted, and authenticated with a credential the gateway has to store and
+  inject. That last part is the interesting one: it exercises the encrypted-credential path with
+  a credential that genuinely matters, which neither `woo` (in-cluster) nor `fx` (no auth) does.
+- **B. A third small server written here**, like `fx-mcp`. Fully under our control and offline,
+  but it proves nothing new: the gateway already proxies two in-cluster servers.
+- **C. Another public remote MCP server** with no auth. Proves remote, not credentials.
+
+**Kapardhi's choice:** A, GitHub's remote MCP server, added through the dashboard's Add Server
+form with a fine-grained PAT he creates himself, scoped to one repository with Issues read and
+write. B is kept as the fallback.
+
+**Kapardhi's reason (own words):** Not given as a quote. The choice was stated directly along
+with the fallback, so the reasoning recorded here is Claude's and is marked as such: A is the only
+option that exercises a real third-party credential end to end, and the credential path is the
+part of the gateway a reviewer is most likely to probe. (AI-drafted, accepted by Kapardhi)
+
+**Status:** decided. Nothing built: waiting on the PAT, which Kapardhi creates himself. No token
+has been created by Claude, and none will be.
+
+**Verified before building, without a token (2026-10-22). The fallback is not needed.**
+
+The question was whether a **personal** GitHub account needs Copilot access to use the remote MCP
+server, because if it did, option A would be dead for this project and B would have to take over.
+
+It does not, with a PAT.
+
+- GitHub's own documentation: *"The GitHub MCP server is available to all GitHub users regardless
+  of plan type."* It adds that specific tools inherit the access requirements of the GitHub
+  feature behind them, and gives the example that tools talking to the Copilot cloud agent need a
+  paid Copilot licence. Issue tools are not in that category.
+  Source: https://docs.github.com/en/copilot/how-tos/context/model-context-protocol/using-the-github-mcp-server
+- The server's own repository lists the remote prerequisites as a compatible MCP host plus any
+  applicable org policies, and states: *"Any host application that supports remote MCP servers
+  should support the remote GitHub server with PAT authentication."* The PAT example is exactly
+  the shape the gateway already speaks: `https://api.githubcopilot.com/mcp/` with
+  `Authorization: Bearer <token>`.
+  Source: https://github.com/github/github-mcp-server
+
+**Two caveats found while checking, both worth knowing before tomorrow.**
+
+1. **A blog post claims OAuth needs a Copilot licence.** It may well be right; OAuth is not
+   what we are using. The PAT path is documented as working without one, and the PAT path is what
+   the gateway's credential storage is built for. Nothing here depends on OAuth.
+2. **The default toolset is large, and tokens are billed per request.** Every upstream tool's
+   name, description and schema goes into the chat agent's prompt on every single turn. Adding
+   GitHub's whole default toolset would inflate the cost of every unrelated question about orders.
+   The remote server solves this itself with per-toolset URLs: `https://api.githubcopilot.com/mcp/x/issues`
+   serves only the issues toolset, and appending `/readonly` makes it read-only. The registry
+   stores a URL per upstream already, so this is a value, not a code change.
+   Source: https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md
+
+   **This needs Kapardhi's choice and is not being picked silently.** Issues read and write is
+   what the PAT will be scoped to, so `/x/issues` matches it exactly, and the measured cost of a
+   turn today is 4438 input tokens. The default toolset would add a large multiple of that to
+   every turn. Recommendation: use `/x/issues`. Open until Kapardhi says.
+
+**Egress.** The gateway will need to reach `api.githubcopilot.com` from inside the cluster. It
+already reaches `api.anthropic.com` for the chat agent, so egress works; worth a note only because
+the woo-mcp and fx-mcp NetworkPolicies restrict ingress, not the gateway's egress.

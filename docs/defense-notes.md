@@ -59,6 +59,13 @@ Sections follow the required demo video sections.
 |---|---|---|---|---|
 | 5.1 | Explain the tool loop. | | | todo |
 | 5.2 | How does the agent act as the logged-in user? | | | todo |
+| 5.3 | The agent runs inside the gateway, yet it talks to the gateway's own `/mcp` over HTTP. Why not just call the tools in-process? | | | todo |
+| 5.4 | Why is the per-turn key deleted rather than revoked, when every other key is revoked? | | | todo |
+| 5.5 | Your audit log recorded two different users as "default". How did that happen, and what does it tell you about trusting the rest of the attribution? | | | todo |
+| 5.6 | Why is the daily chat cap global rather than per user? What does that let one user do to the others? | | | todo |
+| 5.7 | D-011 names Gemini as the fallback. Why is there no Gemini adapter? | | | todo |
+| 5.8 | Six tool steps and 1024 max_tokens. What happens when a question genuinely needs more, and is failing the right answer? | | | todo |
+| 5.9 | The agent told you it had assumed the store currency. What would have happened if it had not mentioned it? | | | todo |
 
 ## 6. Local to VPS
 
@@ -67,3 +74,14 @@ Sections follow the required demo video sections.
 | 6.1 | What changes between local and VPS in values files? | | | todo |
 | 6.2 | Ingress, domains, storage and secrets strategy on the VPS. | | | todo |
 | 6.3 | How do you upgrade and roll back with Helm? | | | todo |
+| 6.4 | Why is a DuckDNS hostname a safer base for Let's Encrypt than sslip.io, and how did you establish that? | | | todo |
+| 6.5 | Without TLS, which security property do you lose, and where is that written down? | | | todo |
+
+## 7. Testing and evidence
+
+| # | Question | My answer | Checked against code | Status |
+|---|---|---|---|---|
+| 7.1 | Your store-timezone test passed for four days while the code resolved "today" in UTC. How is that possible, and how would you catch the next one? | | | todo |
+| 7.2 | You have twice shipped a bug that a green check could not distinguish from correct behaviour. What do those two have in common? | | | todo |
+| 7.3 | What does "proved by mutation" mean here, and which tests have been proved that way? | | | todo |
+| 7.4 | Which of your passing rows are evidence of the thing they claim, and which are only evidence that nothing crashed? | | | todo |
