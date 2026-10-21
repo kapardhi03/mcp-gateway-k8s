@@ -312,14 +312,33 @@ reason given was:
   problem: a true observation, attributed to the wrong cause.
 
 Both rows keep their `pass`, with this note attached. The timezone claim itself is now carried by
-`services/woo-mcp/tests/test_store_settings.py`, which pins the behaviour at 23:00 IST, the one
-window in which UTC and IST disagree about the date and therefore the only window in which the bug
-was ever visible. Proved by mutation: restoring the `system_status` read fails 4 of its 12 tests.
+`services/woo-mcp/tests/test_store_settings.py`. Proved by mutation: restoring the `system_status`
+read fails 8 tests across the two woo-mcp test files.
+
+**When the two implementations actually differ, computed rather than reasoned about.** The store's
+"today" window and a UTC "today" window are always offset by 5h30m at each end, so they are never
+identical. But an order only lands in the gap if it was placed between **00:00 and 05:30 IST**:
+
+| Order placed (IST) | Store, Asia/Kolkata | Buggy, UTC |
+|---|---|---|
+| 02:51 | today | **yesterday** |
+| 05:00 | today | **yesterday** |
+| 05:45 | today | today |
+| 12:00 | today | today |
+| 19:00 | today | today |
+| 23:30 | today | today |
+
+**Claude got this backwards first.** The initial write-up of this correction said the bug was
+visible "between 18:30 and midnight IST" and would have sent Kapardhi to place an evening order
+for DOD-04. An evening order is inside **both** windows and proves nothing, so that would have
+produced exactly the kind of vacuous green check this whole section is about. Corrected after
+computing the windows at three times of day.
 
 **The lesson, which is the same one `scripts/check-cluster.sh` exists for.** A check that passes
 under both the correct and the incorrect implementation is not evidence, however green it looks.
-Both of these ran in the afternoon, when the two timezones agree. DOD-04 must be run in the
-evening IST, or with an order placed between 18:30 and midnight IST, for it to mean anything.
+**DOD-04 needs an order placed between 00:00 and 05:30 IST**, asked about later the same IST day.
+Any other order is still a valid test that date filtering works, but it says nothing about the
+timezone.
 
 ## Third upstream: GitHub remote MCP (GH-1 to GH-4)
 

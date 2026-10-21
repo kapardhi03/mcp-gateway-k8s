@@ -9,11 +9,16 @@ to UTC on every request while keeping the site timezone in a separate option.
 So a store set to Asia/Kolkata reported "UTC", and `_day_bounds` resolved
 "today" in UTC while docs/requirements-trace.md claimed the store's own zone.
 
-It survived because IST is UTC+5:30, so the two zones only disagree about
-which day it is between 18:30 and midnight IST, and every test had been run
-in the afternoon. The right source is the REST API index at /wp-json/, which
-exposes `timezone_string` and `gmt_offset`, needs no authentication, and is
-far cheaper than system_status.
+It survived because of which orders the difference touches. IST is UTC+5:30,
+so the two "today" windows are always offset by 5h30m at each end, but an
+order only falls in the gap if it was placed between 00:00 and 05:30 IST.
+Every order in this project had been placed in the daytime, where the two
+implementations agree exactly. Note the direction, which is easy to get
+backwards: an evening order does NOT distinguish them.
+
+The right source is the REST API index at /wp-json/, which exposes
+`timezone_string` and `gmt_offset`, needs no authentication, and is far
+cheaper than system_status.
 
 Each test below fails if the fix is reverted. That is the point of them.
 """
@@ -139,12 +144,8 @@ def test_day_bounds_shift_by_the_store_offset():
     assert (after, before) != (after_utc, before_utc)
 
 
-def test_today_is_a_different_day_in_the_two_zones_late_evening(monkeypatch):
-    """At 23:00 IST the store's "today" and UTC's "today" are different days.
-
-    Frozen rather than waited for. This is the window in which the bug was
-    visible, and it is also the only window nobody had tested in.
-    """
+def test_today_windows_differ_by_the_offset_at_both_ends(monkeypatch):
+    """The two windows are never the same, whatever the time of day."""
     # 2026-10-20 17:30 UTC is 2026-10-20 23:00 IST.
     fixed = datetime(2026, 10, 20, 17, 30, tzinfo=ZoneInfo("UTC"))
 
@@ -161,9 +162,40 @@ def test_today_is_a_different_day_in_the_two_zones_late_evening(monkeypatch):
     # The store's day began at 18:30 UTC on the 19th and has not ended.
     assert (ist_after, ist_before) == ("2026-10-19T18:30:00", "2026-10-20T18:30:00")
     assert (utc_after, utc_before) == ("2026-10-20T00:00:00", "2026-10-21T00:00:00")
-    # An order placed at 19:00 UTC on the 19th is "today" for the store and
-    # yesterday for UTC. That is the bug, in one sentence.
-    assert ist_after < "2026-10-19T19:00:00" < utc_after
+
+
+def test_an_order_just_after_ist_midnight_is_today_only_for_the_store(monkeypatch):
+    """The one case that tells the fixed code from the bug.
+
+    An order placed at 02:51 IST is 21:21 UTC the PREVIOUS day. The store's
+    "today" includes it; a UTC "today" calls it yesterday and leaves it out.
+    An order placed in the evening IST is inside both windows, so it proves
+    nothing: that is the direction this project got backwards once, and it is
+    why DOD-04 has to use an order from the small hours IST.
+    """
+    placed = "2026-10-21T21:21:00"      # 2026-10-22 02:51 IST
+
+    # Asked later the same IST day, which is the ordinary demo case.
+    fixed = datetime(2026, 10, 22, 8, 30, tzinfo=ZoneInfo("UTC"))   # 14:00 IST
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz is not None else fixed
+
+    monkeypatch.setattr(server, "datetime", Frozen)
+
+    ist_after, ist_before = server._day_bounds("Asia/Kolkata", "today")
+    utc_after, utc_before = server._day_bounds("UTC", "today")
+
+    assert ist_after <= placed < ist_before, "the store should count this order as today"
+    assert not (utc_after <= placed < utc_before), "a UTC store would call it yesterday"
+
+    # And the counter-case: an evening order is in both, so it is useless as
+    # evidence either way.
+    evening = "2026-10-22T13:30:00"     # 19:00 IST
+    assert ist_after <= evening < ist_before
+    assert utc_after <= evening < utc_before
 
 
 # ------------------------------------------------------------- currency

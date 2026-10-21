@@ -160,10 +160,13 @@ class WooClient:
         resolved "today" in UTC while the requirements trace claimed the
         store's zone.
 
-        It hid because IST is UTC+5:30: the two zones only disagree about
-        which day it is between 18:30 and midnight IST, and every test had
-        run in the afternoon. Same shape as the gmt_offset Job failure: a
-        thing that looks like it works.
+        It hid because of which orders the difference actually touches.
+        IST is UTC+5:30, so the store's "today" window and a UTC "today"
+        window are always offset by 5h30m at each end, but an order only
+        lands in the gap if it was placed between 00:00 and 05:30 IST. Every
+        order in this project had been placed in the daytime, where both
+        implementations agree, so the bug was invisible. Same shape as the
+        gmt_offset Job failure: a thing that looks like it works.
 
         A site can be configured with a raw UTC offset and no named zone, in
         which case `timezone_string` is empty and `gmt_offset` is the only

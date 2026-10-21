@@ -343,11 +343,18 @@ is therefore about $0.10 a day at its worst.
   the IST window and so could not distinguish them. The results were right; the stated reason was
   not. Both rows keep their pass with a correction attached.
 
-  It hid because IST is UTC+5:30, so the two zones only disagree about the date between 18:30 and
-  midnight IST, and every run had been in the afternoon. This is the same shape as the gmt_offset
-  Job failure: a check that passes under both the correct and the incorrect implementation is not
-  evidence, however green it is. The replacement test freezes 23:00 IST, the only window where
-  the bug was visible, and was proved by mutation.
+  It hid because of which orders the difference touches. The two "today" windows are always
+  offset by 5h30m at each end, but an order only lands in the gap if it was placed between 00:00
+  and 05:30 IST, and every order in this project had been placed in the daytime. Same shape as
+  the gmt_offset Job failure: a check that passes under both the correct and the incorrect
+  implementation is not evidence, however green it is.
+- **And Claude got the window backwards while writing that up.** The first version of the
+  correction said the bug was visible "between 18:30 and midnight IST", and the next step would
+  have been to ask Kapardhi for an evening order to prove DOD-04. An evening order is inside both
+  windows. That would have produced a fresh vacuous green check inside the very section written
+  to warn about vacuous green checks. Caught by computing the windows at three times of day
+  instead of reasoning about the offset in prose. DOD-04 needs an order placed between 00:00 and
+  05:30 IST.
 - **Audit attribution named the key, not the person.** `_authenticate` returned the API key's
   name, and every key created in the dashboard is named "default" unless renamed, so user A's and
   user B's tool calls were both audited as "default". Found while wiring the agent, because the
@@ -369,6 +376,6 @@ no currency anywhere in the payload. Products now carry `currency`. Orders were 
 because an order payload carries its own.
 
 **Next.** DOD-03 to DOD-11 and CA-9 need Kapardhi in a browser as user A and user B, and DOD-04
-needs an order placed between 18:30 and midnight IST for the timezone to mean anything. Then the
+needs an order placed between 00:00 and 05:30 IST for the timezone to mean anything. Then the
 VPS: rotate the bootstrap key, deploy the gateway, and build D-022 and D-023 once the DuckDNS name
 and the PAT exist.
