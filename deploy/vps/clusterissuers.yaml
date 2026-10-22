@@ -1,0 +1,46 @@
+# Let's Encrypt ClusterIssuers for the VPS. See D-022, VDOD-2.
+#
+# Cluster-scoped and ingress-controller-specific, so they live here and NOT
+# under charts/. Keeping them out of the charts is what lets
+# scripts/check-charts.sh stay PASS: a reviewer installing the charts on kind
+# or EKS never renders a Traefik-specific solver.
+#
+# TWO issuers on purpose. Staging has far looser rate limits and issues an
+# untrusted chain. Everything is proved against staging first, so a wrong
+# solver or a DNS mistake costs nothing. Only then does values-prod.yaml move
+# the annotation to letsencrypt-prod.
+#
+# BEFORE APPLYING: set the email. It is the ACME account contact and is where
+# Let's Encrypt sends expiry warnings. Left as a placeholder deliberately:
+# registering an ACME account sends that address to Let's Encrypt, and that
+# is Kapardhi's to decide, not Claude's.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: ACME_EMAIL_PLACEHOLDER
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ACME_EMAIL_PLACEHOLDER
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

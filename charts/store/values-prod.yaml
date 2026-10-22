@@ -1,15 +1,30 @@
-# Production k3s VPS overrides. See D-002, D-003, D-004.
+# Production k3s VPS overrides. See D-002, D-003, D-004, D-022.
 #
-# sslip.io resolves store.34.93.101.10.sslip.io to 34.93.101.10, the VPS
-# static IP, with no DNS to buy or configure. See the D-004 addendum.
-# It must not be a localhost or .local name: scripts/check-charts.sh
-# fails the render if a local-only value leaks into a prod render.
+# Host moved from sslip.io to DuckDNS on 2026-10-22. sslip.io is NOT on the
+# Public Suffix List, so every sslip.io name in the world shares one global
+# Let's Encrypt bucket of 50 certificates per week. duckdns.org IS on the
+# list, so kapardhi-gw.duckdns.org is its own registered domain with its own
+# bucket. See D-022 for the evidence.
 ingress:
   className: traefik
-  host: store.34.93.101.10.sslip.io
+  host: store.kapardhi-gw.duckdns.org
+  annotations:
+    # cert-manager watches this annotation and issues into ingress.tls.secretName.
+    # STAGING first. Switch to letsencrypt-prod only once a staging certificate
+    # has issued end to end, so a misconfiguration never burns a prod slot.
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  tls:
+    enabled: true
+    secretName: store-tls
 
 storage:
   className: local-path
+
+wordpress:
+  # WordPress is behind Traefik, which terminates TLS and forwards plain HTTP.
+  # Without this, is_ssl() is false, WordPress sees http against an https
+  # home URL and redirects forever. See VDOD-6.
+  trustForwardedProto: true
 
 database:
   resources:
@@ -19,8 +34,6 @@ database:
     limits:
       cpu: 1000m
       memory: 768Mi
-
-wordpress:
   resources:
     requests:
       cpu: 200m

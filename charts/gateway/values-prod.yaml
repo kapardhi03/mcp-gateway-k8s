@@ -1,7 +1,18 @@
-# Production k3s VPS overrides.
+# Production k3s VPS overrides. See D-022.
 ingress:
   className: traefik
-  host: gateway.34.93.101.10.sslip.io
+  host: gateway.kapardhi-gw.duckdns.org
+  annotations:
+    # STAGING first, then letsencrypt-prod. See VDOD-3 and VDOD-4.
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  tls:
+    enabled: true
+    secretName: gateway-tls
+
+gateway:
+  # TLS ends at the ingress controller, so the pod is reached over plain
+  # HTTP. Without this the Secure cookie flag can never turn on. VDOD-8.
+  forwardedAllowIps: "*"
 
 postgres:
   storage:

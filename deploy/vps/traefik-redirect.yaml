@@ -1,0 +1,33 @@
+# Redirect every plain HTTP request to HTTPS, cluster-wide. See VDOD-5.
+#
+# k3s manages its bundled Traefik with a HelmChart resource, and a
+# HelmChartConfig in kube-system merges extra values into it. This is a
+# cluster-level concern, not an application one, which is why it is here and
+# not in charts/: the apps stay portable and a reviewer's cluster decides its
+# own redirect policy.
+#
+# This does NOT break the ACME HTTP-01 challenge. Let's Encrypt's validator
+# "follows redirects, up to 10 redirects deep", accepts redirects to http or
+# https on ports 80 and 443, and "when redirected to an HTTPS URL, it does
+# not validate certificates", precisely so a challenge can bootstrap the
+# first certificate. Verified before writing this, not assumed.
+# Source: https://letsencrypt.org/docs/challenge-types/
+#
+# NOT YET APPLIED OR VERIFIED. The valuesContent schema belongs to the
+# Traefik chart that this k3s ships, so confirm the key path against the
+# running Traefik before relying on it:
+#   kubectl -n kube-system get helmchart traefik -o yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+            permanent: true

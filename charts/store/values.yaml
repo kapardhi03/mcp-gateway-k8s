@@ -20,6 +20,11 @@ ingress:
   path: /
   pathType: Prefix
   annotations: {}
+  # TLS off by default. values-prod.yaml turns it on and names the
+  # Secret cert-manager writes the certificate into. See D-022.
+  tls:
+    enabled: false
+    secretName: ""
 
 storage:
   # Empty means "use the cluster default StorageClass". Set explicitly per
@@ -125,6 +130,11 @@ wordpress:
   # day. Identical in local and prod on purpose: the store is one business, so
   # its trading day does not change with the cluster it runs in.
   timezone: "Asia/Kolkata"
+
+  # Believe X-Forwarded-Proto: https from the ingress controller. Needed
+  # wherever TLS is terminated at the proxy. Off locally, where there is
+  # no TLS at all. See D-022 and VDOD-6.
+  trustForwardedProto: false
 
 # WooCommerce REST API credentials for the Woo MCP server. See D-006, D-019.
 #

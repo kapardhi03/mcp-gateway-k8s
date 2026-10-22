@@ -58,7 +58,11 @@ spec:
                   name: {{ .Values.wordpress.admin.existingSecret }}
                   key: {{ .Values.wordpress.admin.secretKeys.email }}
             - name: SITE_URL
-              value: "http://{{ .Values.ingress.host }}"
+              # Scheme follows ingress.tls, so turning TLS on in values moves
+              # WordPress's home and siteurl with it. Hardcoding http here was
+              # fine until there was a prod certificate; with an https Ingress
+              # and an http home URL, WordPress redirect-loops. See VDOD-6.
+              value: "{{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}"
             - name: SITE_TITLE
               value: {{ .Values.wordpress.siteTitle | quote }}
             - name: SITE_TIMEZONE
@@ -184,6 +188,28 @@ spec:
                     '{"enabled":"yes","title":"Cash on delivery","description":"Pay with cash upon delivery.","instructions":"Pay with cash upon delivery.","enable_for_methods":[],"enable_for_virtual":"yes"}' \
                     --format=json ;;
               esac
+
+              # --- site URL (guarded) ---
+              # `core install` above sets these, but it is SKIPPED on an
+              # install that already exists, so moving the site to a new host
+              # or to https would otherwise never take effect. This is that
+              # path: the VPS install was created on an sslip.io http URL and
+              # has to move to https on DuckDNS without being reinstalled.
+              #
+              # Guarded by comparison first, for the gmt_offset reason: `wp
+              # option update` exits non-zero when the value is unchanged, and
+              # under `set -eu` that fails the Job. A Job with a backoffLimit
+              # then reports Complete off the retry and the failure is
+              # invisible. See scripts/check-cluster.sh.
+              for opt in home siteurl; do
+                URL_NOW="$($WP option get "$opt" 2>/dev/null || true)"
+                if [ "$URL_NOW" = "$SITE_URL" ]; then
+                  echo "SKIP  $opt already $SITE_URL"
+                else
+                  echo "RUN   set $opt to $SITE_URL (was: ${URL_NOW:-unset})"
+                  $WP option update "$opt" "$SITE_URL"
+                fi
+              done
 
               # --- store timezone (guarded) ---
               # Only timezone_string is set. WordPress derives gmt_offset from

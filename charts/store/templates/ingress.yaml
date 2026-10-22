@@ -15,6 +15,16 @@ spec:
   # hardcoded here, so the chart installs unchanged on another ingress
   # controller. See D-002 and scripts/check-charts.sh.
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  # TLS is values-only. The host, the Secret name and the issuer annotation
+  # all come from values-prod.yaml, so this chart still renders without TLS
+  # on a reviewer's cluster and nothing cluster-specific is hardcoded here.
+  # The issuer is named by an annotation, not here: see values-prod.yaml.
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ required "ingress.tls.secretName is required when ingress.tls.enabled" .Values.ingress.tls.secretName | quote }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:

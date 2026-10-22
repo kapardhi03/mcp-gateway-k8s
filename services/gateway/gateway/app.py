@@ -408,8 +408,28 @@ def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     import uvicorn
 
+    # FORWARDED_ALLOW_IPS decides whether X-Forwarded-Proto is believed.
+    #
+    # Behind an ingress controller that terminates TLS, the pod is reached
+    # over plain HTTP, so `request.url.scheme` is "http" and the session
+    # cookie's Secure flag never turns on, however correct the conditional
+    # is. uvicorn parses the forwarded headers only for clients listed here,
+    # and the default is 127.0.0.1, which the ingress controller is not.
+    #
+    # Empty by default, so a local run trusts nothing and behaves exactly as
+    # it does today. Prod sets "*", which is safe in this topology for two
+    # reasons: the gateway Service is ClusterIP with no route from outside,
+    # and the only thing a spoofed X-Forwarded-Proto: https can do is make
+    # the cookie MORE restrictive. See VDOD-8 and SEC-2.
+    forwarded = os.environ.get("FORWARDED_ALLOW_IPS", "").strip()
+    kwargs: dict[str, Any] = {}
+    if forwarded:
+        kwargs["proxy_headers"] = True
+        kwargs["forwarded_allow_ips"] = forwarded
+
     uvicorn.run(build_app(), host="0.0.0.0",
-                port=int(os.environ.get("PORT", "8080")), log_level="warning")
+                port=int(os.environ.get("PORT", "8080")),
+                log_level="warning", **kwargs)
 
 
 if __name__ == "__main__":

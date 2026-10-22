@@ -56,6 +56,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.gateway.existingSecret }}
                   key: {{ .Values.gateway.secretKeys.bootstrapApiKey }}
+            {{- with .Values.gateway.forwardedAllowIps }}
+            # Believe X-Forwarded-Proto from the proxy, so the session cookie
+            # gets Secure behind a TLS-terminating ingress. Empty by default.
+            - name: FORWARDED_ALLOW_IPS
+              value: {{ . | quote }}
+            {{- end }}
             - name: UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.gateway.upstreamTimeoutSeconds | quote }}
             - name: HEALTH_INTERVAL_SECONDS

@@ -36,6 +36,22 @@ spec:
           env:
             - name: WORDPRESS_DB_HOST
               value: "{{ include "store.db.fullname" . }}:{{ .Values.database.service.port }}"
+            {{- if .Values.wordpress.trustForwardedProto }}
+            # The ingress controller terminates TLS and forwards plain HTTP to
+            # this pod, so PHP's is_ssl() is false and WordPress, whose home URL
+            # is https, redirects to https forever. This believes the proxy.
+            #
+            # It deliberately only trusts the header when it says https. It does
+            # NOT force HTTPS on unconditionally, because woo-mcp calls this pod
+            # in-cluster over plain HTTP without the header, and WooCommerce signs
+            # OAuth with is_ssl() ? 'https' : 'http'. Forcing it on would flip
+            # every in-cluster signature to https and break woo-mcp. See VDOD-7.
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                if ( isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === $_SERVER['HTTP_X_FORWARDED_PROTO'] ) {
+                    $_SERVER['HTTPS'] = 'on';
+                }
+            {{- end }}
             - name: WORDPRESS_DB_NAME
               value: {{ .Values.database.name | quote }}
             - name: WORDPRESS_DB_USER

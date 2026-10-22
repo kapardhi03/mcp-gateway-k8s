@@ -29,6 +29,11 @@ ingress:
   path: /
   pathType: Prefix
   annotations: {}
+  # TLS off by default. values-prod.yaml turns it on and names the
+  # Secret cert-manager writes the certificate into. See D-022.
+  tls:
+    enabled: false
+    secretName: ""
 
 # Upstreams the gateway registers on first start. Both in-cluster for phase 1
 # (D-010). Namespace-qualified short names, not .svc.cluster.local FQDNs,
@@ -40,6 +45,9 @@ upstreams:
 gateway:
   # Per-upstream budget. A slow upstream costs this much and no more, because
   # the fan-out is concurrent (GW-5).
+  # Which proxy addresses may set X-Forwarded-Proto. Empty means trust
+  # nothing, which is right locally where there is no TLS. Prod sets "*".
+  forwardedAllowIps: ""
   upstreamTimeoutSeconds: 8
   healthIntervalSeconds: 30
   # Existing Secret holding keys: encryption-key, bootstrap-api-key.
