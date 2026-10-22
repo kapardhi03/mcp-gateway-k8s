@@ -425,6 +425,38 @@ Issues read and write. Claude creates no token.
 | GH-3 | GitHub's tools appear for user A's chat agent | After the server is added and enabled, A asks a question in the dashboard Chat tab that needs GitHub, and the agent calls a `github__*` tool. The tools appear without restarting the gateway, because the registry refresh is what publishes them. | | todo |
 | GH-4 | The same tools appear for user B's external client | B's Claude Code, configured with only the gateway URL and B's own key, lists the `github__*` tools alongside `woo__*` and `fx__*`. B's config contains no GitHub URL and no PAT. This is the whole point of the gateway: B gets access to a credentialled upstream without ever holding the credential. | | todo |
 
+## VPS over HTTPS (VDOD-1 to VDOD-13)
+
+**Pre-registered 2026-10-22, before cert-manager is installed and before any chart change.**
+See D-022. Hosts: `store.kapardhi-gw.duckdns.org` and `gateway.kapardhi-gw.duckdns.org`.
+
+**DNS confirmed first.** All three of `kapardhi-gw`, `store.kapardhi-gw` and
+`gateway.kapardhi-gw` under `duckdns.org` resolve to `34.93.101.10`. Kapardhi had checked the
+first two; `gateway.` is the one the gateway Ingress needs and it resolves as well.
+
+**cert-manager version pinned before writing this:** chart `v1.21.2` from
+`oci://quay.io/jetstack/charts/cert-manager`, CRDs via `--set crds.enabled=true`. Taken from
+cert-manager's own install page, not from memory. Source: https://cert-manager.io/docs/installation/helm/
+
+| # | Check | Expected (written before any of it exists) | Actual | Result |
+|---|---|---|---|---|
+| VDOD-1 | cert-manager installed | Chart `v1.21.2` in namespace `cert-manager`, pinned not floating. `cert-manager`, `cert-manager-webhook` and `cert-manager-cainjector` all Running and Ready. CRDs present, including `clusterissuers.cert-manager.io` and `certificates.cert-manager.io`. | | todo |
+| VDOD-2 | Both ClusterIssuers Ready | `letsencrypt-staging` and `letsencrypt-prod` exist, both solving HTTP-01 through `ingressClassName: traefik`, both reporting `Ready=True` with an ACME account registered. Two issuers, not one, so prod is never the thing being debugged. | | todo |
+| VDOD-3 | Staging certificate issues for both hosts | With the staging issuer selected, `Certificate` resources for both hosts reach `Ready=True`. The chain is Let's Encrypt **staging**, so a browser rejects it: that is the expected and correct outcome at this stage, and it proves the HTTP-01 challenge path works end to end without spending a prod rate-limit slot. | | todo |
+| VDOD-4 | Prod certificate issues for both hosts | Switching the issuer in values only, both hosts get a certificate from Let's Encrypt production. `openssl s_client` shows a chain rooted in ISRG Root X1, CN matching the host, not expired, and `curl` without `-k` succeeds on both. | | todo |
+| VDOD-5 | HTTP redirects to HTTPS | `curl -I http://store.kapardhi-gw.duckdns.org/` and the same for the gateway host return a 3xx to the `https://` form of the same URL. Plain HTTP must not serve content. | | todo |
+| VDOD-6 | WordPress is reachable over HTTPS with no redirect loop | `home` and `siteurl` are `https://store.kapardhi-gw.duckdns.org`, and WordPress is told to treat `X-Forwarded-Proto: https` as SSL. `curl -IL https://store.kapardhi-gw.duckdns.org/` ends in a single 200, with **no** chain of repeating 301s. The failure this guards against is the classic one: home is https, the pod sees plain http from Traefik, `is_ssl()` is false, WordPress redirects to https, Traefik forwards http again, forever. | | todo |
+| VDOD-7 | woo-mcp still signs OAuth correctly, and the wrong value is proven wrong | **Derived from WooCommerce's source, not guessed.** `check_oauth_signature()` builds the base string as `rawurlencode( get_home_url( null, $request_path, is_ssl() ? 'https' : 'http' ) )`. The **host** comes from `get_home_url()`, so it becomes the DuckDNS name. The **scheme** comes from `is_ssl()`, which overrides the stored home URL. woo-mcp calls WordPress in-cluster over plain HTTP and sends no `X-Forwarded-Proto`, so `is_ssl()` stays false. **Prediction: `store.homeUrl` must be `http://store.kapardhi-gw.duckdns.org` — new host, but still the `http` scheme.** Proven discriminating with a probe pod before deploying: signing `http://store.kapardhi-gw.duckdns.org` returns 200, and signing `https://store.kapardhi-gw.duckdns.org` returns 401. If both pass, the test proves nothing and must be redesigned. Also check `GET http://store-store-wp.store/wp-json/` returns 200 and not a 301 to https, since a canonical redirect would break woo-mcp regardless of signing. Source: https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/includes/class-wc-rest-authentication.php | | todo |
+| VDOD-8 | The session cookie gets `Secure` on the VPS | Signing in to the dashboard over `https://gateway.kapardhi-gw.duckdns.org` returns `Set-Cookie: gw_session=...; HttpOnly; Secure; SameSite=lax`. SEC-2 asserted this conditionally and could not show it, because local runs on plain HTTP. This is the row that discharges that. It requires the gateway to trust `X-Forwarded-Proto`, since the pod itself is reached over http by Traefik, so `request.url.scheme` is `http` unless the header is honoured. | | todo |
+| VDOD-9 | Bootstrap key rotated before exposure | `scripts/rotate-gateway-key.sh` is run against the VPS **before** the gateway Ingress serves publicly. The old key, which is in a session transcript, stops working; `encryption-key` is unchanged, so stored upstream credentials still decrypt. Ordering matters and is part of the check: rotate first, expose second. | | todo |
+| VDOD-10 | Charts stay portable | `scripts/check-charts.sh` still PASSes. TLS, the issuer and both hostnames come from `values-prod.yaml` only; no `traefik`, no hostname and no issuer name is hardcoded in any `templates/`. A reviewer must still be able to install these charts on kind or EKS. | | todo |
+| VDOD-11 | No Job passed only on retry | `scripts/check-cluster.sh` against the VPS reports `failed == 0` for every Job, the store bootstrap Job included. | | todo |
+| VDOD-12 | WM-2 rerun on the VPS | A Python MCP SDK client in a pod labelled `app.kubernetes.io/name=gateway` lists exactly 5 woo tools: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`. No more, no fewer. | | todo |
+| VDOD-13 | GW-5 rerun on the VPS | woo-mcp scaled to 0: `tools/list` still returns the `fx__*` tools inside the 8s per-upstream timeout, the `woo__*` tools are absent, and woo reads `Unreachable`. Scaling back restores all seven. Scale, not `delete pod`: on local, a pod delete self-healed in under 4 seconds and showed nothing. | | todo |
+
+**Not in scope tonight, by Kapardhi's instruction.** No A or B accounts are created on the VPS.
+He will do the VPS sitting tomorrow with fresh passwords, which is also S-11.
+
 ## Kubernetes and Helm
 
 | ID | Requirement | Implemented in | Evidence | Status |
