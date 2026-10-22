@@ -23,3 +23,8 @@ store:
 
 imagePullSecrets:
   - name: ghcr
+
+# Pinned, multi-arch (linux/amd64 + linux/arm64), private on GHCR.
+# Store timezone read from /wp-json/ and product currency. Pushed 2026-10-22.
+image:
+  tag: "0.1.4"

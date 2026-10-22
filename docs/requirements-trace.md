@@ -454,6 +454,20 @@ cert-manager's own install page, not from memory. Source: https://cert-manager.i
 | VDOD-12 | WM-2 rerun on the VPS | A Python MCP SDK client in a pod labelled `app.kubernetes.io/name=gateway` lists exactly 5 woo tools: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`. No more, no fewer. | | todo |
 | VDOD-13 | GW-5 rerun on the VPS | woo-mcp scaled to 0: `tools/list` still returns the `fx__*` tools inside the 8s per-upstream timeout, the `woo__*` tools are absent, and woo reads `Unreachable`. Scaling back restores all seven. Scale, not `delete pod`: on local, a pod delete self-healed in under 4 seconds and showed nothing. | | todo |
 
+**Images pushed 2026-10-22, before any deploy.** GHCR held only `woo-mcp:0.1.1`, so the gateway
+and fx-mcp had never been pushed at all and prod would have been missing the timezone fix. All
+three built multi-arch and pushed private, with the tags pinned in each `values-prod.yaml` so the
+deploy is declarative rather than a `--set`:
+
+| Image | Tag | Architectures | Carries |
+|---|---|---|---|
+| `ghcr.io/kapardhi03/gateway` | `0.4.4` | linux/amd64, linux/arm64 | dashboard, chat agent, `FORWARDED_ALLOW_IPS` |
+| `ghcr.io/kapardhi03/fx-mcp` | `0.1.0` | linux/amd64, linux/arm64 | first push of this service |
+| `ghcr.io/kapardhi03/woo-mcp` | `0.1.4` | linux/amd64, linux/arm64 | store timezone fix, product currency |
+
+Architectures read back from the pushed manifest lists with `docker buildx imagetools inspect`,
+not assumed from the build flags. Visibility confirmed `private` on all three.
+
 **Not in scope tonight, by Kapardhi's instruction.** No A or B accounts are created on the VPS.
 He will do the VPS sitting tomorrow with fresh passwords, which is also S-11.
 
