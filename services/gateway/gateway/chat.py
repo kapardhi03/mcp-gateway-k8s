@@ -68,6 +68,8 @@ When the question is about "today", pass date="today" to the orders tool. It \
 resolves the day in the store's own timezone, which is not UTC. Never work out a \
 date yourself.
 
+If a tool call succeeds and returns no results, there are none. Say so plainly. Don't suggest the lookup may have failed.
+
 Prices and totals come back as strings in the store's currency. If the user asks \
 for another currency, convert with the fx tools rather than estimating a rate.
 

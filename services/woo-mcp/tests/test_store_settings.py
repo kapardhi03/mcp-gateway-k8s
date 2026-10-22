@@ -56,6 +56,35 @@ def _json(payload):
     return httpx.Response(200, json=payload)
 
 
+def wp_index(timezone_string="Asia/Kolkata", gmt_offset=5.5):
+    """A realistic /wp-json/ payload.
+
+    The key names and the surrounding fields are copied from what the live
+    store actually returns, not invented, so a test cannot pass against a
+    shape WordPress does not produce. That is the mistake the old tests made:
+    they mocked system_status returning `default_timezone: "Asia/Kolkata"`,
+    which no WordPress ever sends, and so they agreed with the bug.
+    """
+    return {
+        "name": "Demo Store",
+        "description": "",
+        "url": "http://store.localhost",
+        "home": "http://store.localhost",
+        "gmt_offset": gmt_offset,
+        "timezone_string": timezone_string,
+        "namespaces": ["wp/v2", "wc/v3"],
+        "authentication": {},
+        "routes": {},
+        "site_icon": 0,
+        "site_icon_url": "",
+        "site_logo": 0,
+        "page_on_front": 0,
+        "page_for_posts": 0,
+        "show_on_front": "posts",
+        "_links": {},
+    }
+
+
 def store(index=None, general=None, system_status=None, seen=None):
     """A mock store. `seen` collects the paths actually requested."""
 
@@ -81,7 +110,7 @@ def store(index=None, general=None, system_status=None, seen=None):
 # ------------------------------------------------------- timezone, the bug
 
 def test_timezone_comes_from_the_rest_index():
-    c = client(store(index={"timezone_string": "Asia/Kolkata", "gmt_offset": 5.5}))
+    c = client(store(index=wp_index()))
     assert c.store_timezone() == "Asia/Kolkata"
 
 
@@ -94,7 +123,7 @@ def test_system_status_default_timezone_is_ignored():
     """
     seen: list[str] = []
     c = client(store(
-        index={"timezone_string": "Asia/Kolkata", "gmt_offset": 5.5},
+        index=wp_index(),
         system_status={"environment": {"default_timezone": "UTC"},
                        "settings": {"currency": "USD"}},
         seen=seen,
@@ -106,7 +135,7 @@ def test_system_status_default_timezone_is_ignored():
 
 def test_timezone_falls_back_to_gmt_offset_when_unnamed():
     """A site can be set to a raw UTC offset with no named zone."""
-    c = client(store(index={"timezone_string": "", "gmt_offset": 5}))
+    c = client(store(index=wp_index(timezone_string="", gmt_offset=5)))
     # Etc/GMT-5 is UTC+5. The sign is inverted in the Etc zone names, which
     # is why this is asserted rather than assumed.
     assert c.store_timezone() == "Etc/GMT-5"
@@ -116,7 +145,7 @@ def test_timezone_falls_back_to_gmt_offset_when_unnamed():
 
 def test_timezone_half_hour_offset_without_a_name_does_not_round():
     """5.5 has no Etc zone. Rounding it to 5 or 6 would be a silent lie."""
-    c = client(store(index={"timezone_string": "", "gmt_offset": 5.5}))
+    c = client(store(index=wp_index(timezone_string="", gmt_offset=5.5)))
     assert c.store_timezone() == "UTC"
 
 
@@ -198,6 +227,56 @@ def test_an_order_just_after_ist_midnight_is_today_only_for_the_store(monkeypatc
     assert utc_after <= evening < utc_before
 
 
+def test_frozen_at_0030_ist_the_two_implementations_disagree(monkeypatch):
+    """00:30 IST, the first half hour of the store's day.
+
+    This is the sharpest point in the cycle. IST has rolled into 22 October
+    while UTC is still on the 21st, so the store and a UTC implementation do
+    not even agree on which DATE "today" is, let alone which window:
+
+        store, Asia/Kolkata : 21 Oct 18:30 UTC .. 22 Oct 18:30 UTC   (22 Oct IST)
+        buggy, UTC          : 21 Oct 00:00 UTC .. 22 Oct 00:00 UTC   (21 Oct UTC)
+
+    DOD-04 is being run as the plain version, with an order placed and the
+    agent returning it, which proves the requirement but not this edge
+    because an order placed in daylight sits inside both windows. This test
+    is what covers the edge instead.
+    """
+    # 2026-10-21 19:00 UTC is 2026-10-22 00:30 IST.
+    fixed = datetime(2026, 10, 21, 19, 0, tzinfo=ZoneInfo("UTC"))
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz is not None else fixed
+
+    monkeypatch.setattr(server, "datetime", Frozen)
+
+    assert Frozen.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M") == "2026-10-22 00:30"
+    assert Frozen.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M") == "2026-10-21 19:00"
+
+    assert server._day_bounds("Asia/Kolkata", "today") == (
+        "2026-10-21T18:30:00", "2026-10-22T18:30:00")
+    assert server._day_bounds("UTC", "today") == (
+        "2026-10-21T00:00:00", "2026-10-22T00:00:00")
+
+    # An order placed right now, at 00:30 IST, asked about later the same IST
+    # day once UTC has rolled over, is the case that separates them.
+    placed = "2026-10-21T19:00:00"
+    later = datetime(2026, 10, 22, 9, 0, tzinfo=ZoneInfo("UTC"))      # 14:30 IST
+
+    class FrozenLater(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later.astimezone(tz) if tz is not None else later
+
+    monkeypatch.setattr(server, "datetime", FrozenLater)
+    i0, i1 = server._day_bounds("Asia/Kolkata", "today")
+    u0, u1 = server._day_bounds("UTC", "today")
+    assert i0 <= placed < i1, "the store must still count it as today"
+    assert not (u0 <= placed < u1), "a UTC store drops it once UTC rolls over"
+
+
 # ------------------------------------------------------------- currency
 
 def test_currency_comes_from_settings_general():
@@ -221,7 +300,7 @@ def test_product_summary_carries_the_currency():
 
 def test_list_products_labels_prices_with_the_currency():
     server.set_client(client(store(
-        index={"timezone_string": "Asia/Kolkata", "gmt_offset": 5.5},
+        index=wp_index(),
         general=[{"id": "woocommerce_currency", "value": "USD"}],
     )))
     rows = server.list_products()
@@ -239,7 +318,7 @@ def test_store_settings_are_cached():
     a request the store does not need to serve.
     """
     seen: list[str] = []
-    c = client(store(index={"timezone_string": "Asia/Kolkata"},
+    c = client(store(index=wp_index(),
                      general=[{"id": "woocommerce_currency", "value": "USD"}],
                      seen=seen))
     for _ in range(5):

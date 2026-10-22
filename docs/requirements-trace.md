@@ -18,7 +18,7 @@ died on `wp option update gmt_offset`.
 | DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | Kapardhi checked out in a browser at http://store.localhost/ on 2026-10-16 | Order 12 created, payment method `cod` (Cash on delivery), total 19.99 USD, line item `Demo Widget` x1 sku `DEMO-WIDGET-1` | `wc_get_orders()` via `kubectl exec` on the WordPress pod | pass |
 | DOD-02 | Order from DOD-01 visible in WooCommerce admin | WooCommerce 11.2.1 admin | Order 12 status `processing`, created 2026-10-16T15:37:15Z. Admin URL `http://store.localhost/wp-admin/admin.php?page=wc-orders&action=edit&id=12`. Orders list route returns 302 to `wp-login.php` when unauthenticated, which confirms the route exists and is protected. Orders use WooCommerce legacy post storage, not HPOS; `wc_get_orders()` is storage-agnostic and was used for this check. | WP-CLI-equivalent PHP via `kubectl exec`, output in `docs/build-log.md` | pass |
 | DOD-03 | User A, chat agent: create product with name and price, it appears on storefront | Pre-registered 2026-10-18. User A, signed in to the dashboard in a browser, types one sentence asking for a product with a given name and price. The chat agent calls `woo__create_product` **through the gateway**, shows which tool it called, and the product is then reachable on the storefront at its permalink with that name and price. The browser never calls a tool directly. | 2026-10-22, Kapardhi in a browser. Two audit rows, `a@example.com` / `woo` / `create_product` / `ok` at 21:58:48 and 23:17:18 UTC, each inside a `chat`/`turn` row, so the call went through the gateway and not from the page. Products #15 and #16 "Gateway Mug" exist at 12.50, both `is_purchasable=yes` and `is_in_stock=yes`, so they are live on the storefront. Asked for once, run twice: **the duplicate should be trashed before the demo.** | pass |
-| DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | Pre-registered 2026-10-18. An order placed in the storefront today, then User A asks the agent in plain English. The agent calls `woo__list_orders` with the date resolved in the **store's** timezone (Asia/Kolkata) and returns that order. An order from a previous day is not returned. | | | todo |
+| DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | Pre-registered 2026-10-18. An order placed in the storefront today, then User A asks the agent in plain English. The agent calls `woo__list_orders` with the date resolved in the **store's** timezone (Asia/Kolkata) and returns that order. An order from a previous day is not returned. | **Split in two, Kapardhi's decision 2026-10-22, and the split is recorded rather than quietly made.** The live check is the plain version: order placed, agent asked, agent returns it. That is the requirement as written and it is what the demo shows. It does **not** prove the timezone, because an order placed in daylight falls inside both the Asia/Kolkata and a UTC window, so the two implementations give identical answers. Proving the timezone live needs an order placed between 00:00 and 05:30 IST and a question asked after 05:30 IST the same day, which is a demo nobody can schedule. **The timezone edge is covered by unit test instead**, in `services/woo-mcp/tests/test_store_settings.py`. Live half still `todo`: no order has been placed yet. | todo |
 | DOD-05 | User B: external client connects with only gateway URL + B's key, sees tools of every enabled server | Pre-registered 2026-10-18. User B is a second, non-admin account that generated **its own** key in the dashboard. An external MCP client configured with only the gateway URL and that key lists all seven tools. No upstream URL and no upstream credential appear in B's client config. B's key is distinct from A's and from the bootstrap key. | **Server side proven, client side still failing.** A key created by B against `POST /mcp` returns all seven tools: `fx__convert`, `fx__rates` and the five `woo__*`. So a B-owned key is accepted and sees every enabled server. Kapardhi's own client was not: nine `rejected / missing or invalid API key` audit rows between 21:58 and 00:30 UTC, including three AFTER his current key was created, which means the client is still presenting an older key. B has created four keys tonight and three are revoked. The three failure modes were measured apart, because they are not distinguishable from the client's error message: correct URL and key -> 7 tools; URL without the `/mcp` path -> **404** and no audit row; key with a trailing newline -> **400** and no audit row; revoked key -> **401** with an audit row. Only the last writes `missing or invalid API key`, so the nine rows say the client reached `/mcp` and presented a key the gateway had revoked. Needs a fresh key pasted straight into the client. | partial |
 | DOD-06 | User B: same orders question succeeds | Pre-registered 2026-10-18. The same orders question answered through B's key returns the same order as DOD-04, and the audit rows for it are attributed to **B**, not A and not bootstrap-admin. | **Attribution half proven, answer half blocked.** B asked the orders question through the dashboard agent three times (21:59, 22:01, 00:29 UTC); every row reads `b@example.com`, never A and never bootstrap-admin, with its own token counts. The "returns the same order" half cannot pass yet because **no order has been placed**, so both A and B correctly got an empty result. Finishes as soon as DOD-04 has an order. | partial |
 | DOD-07 | User B: one prompt uses tools from two different upstream servers | Pre-registered 2026-10-18. One natural-language prompt from B causes calls to both `woo__*` and `fx__*` in the same answer, with the model choosing both unaided. Already evidenced for a bootstrap key in GW-4; this repeats it as user B. | | | todo |
@@ -336,9 +336,36 @@ computing the windows at three times of day.
 
 **The lesson, which is the same one `scripts/check-cluster.sh` exists for.** A check that passes
 under both the correct and the incorrect implementation is not evidence, however green it looks.
-**DOD-04 needs an order placed between 00:00 and 05:30 IST**, asked about later the same IST day.
-Any other order is still a valid test that date filtering works, but it says nothing about the
-timezone.
+
+**How the requirement and the edge are split.** Proving the timezone live needs an order placed
+between 00:00 and 05:30 IST, asked about after 05:30 IST the same day. That is a five and a half
+hour window in the middle of the night and it cannot be scheduled into a demo. So:
+
+- **The live DOD-04 check covers the requirement**: an order is placed, the agent is asked "what
+  orders came in today", and it returns that order.
+- **The unit tests cover the timezone edge.** `tests/test_store_settings.py` holds the cases the
+  live run cannot reach, with a frozen clock so they need no particular hour:
+
+  | Test | What it pins |
+  |---|---|
+  | `test_frozen_at_0030_ist_the_two_implementations_disagree` | At 00:30 IST the store is on 22 Oct while UTC is still on the 21st. Asserts both windows exactly, then that an order placed at that instant is still "today" for the store at 14:30 IST and has been dropped by UTC. |
+  | `test_an_order_just_after_ist_midnight_is_today_only_for_the_store` | The same separation from the order's side, plus the counter-case that an evening order sits in both windows and so proves nothing. |
+  | `test_system_status_default_timezone_is_ignored` | The bug itself. A realistic payload where the index says `Asia/Kolkata` and system_status says `UTC`. |
+  | `test_timezone_comes_from_the_rest_index` | The source is `/wp-json/`, and system_status is never fetched for it. |
+
+  The fixtures use a **realistic** `/wp-json/` payload copied field for field from the live
+  store, not a two-key stub. That matters: the tests this replaced mocked `system_status`
+  returning `default_timezone: "Asia/Kolkata"`, which no WordPress ever sends, and so they
+  agreed with the bug.
+
+  **Note on the source.** The site timezone is a WordPress core option, not a WooCommerce
+  setting, and `/wc/v3/settings/general` does not carry it. `/wp-json/` is the endpoint that
+  publishes it, it needs no authentication, and it was confirmed against the live store
+  returning `timezone_string: 'Asia/Kolkata'`, `gmt_offset: 5.5`.
+
+  **Proved by mutation**, re-run 2026-10-22 against the final test set: restoring the
+  `system_status` read fails **8** tests across the two woo-mcp test files, and all 40 pass once
+  it is put back.
 
 ## Finding, now fixed: the Servers page lagged the served tool list
 
