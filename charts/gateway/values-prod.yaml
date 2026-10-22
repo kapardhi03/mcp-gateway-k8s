@@ -4,7 +4,7 @@ ingress:
   host: gateway.kapardhi-gw.duckdns.org
   annotations:
     # STAGING first, then letsencrypt-prod. See VDOD-3 and VDOD-4.
-    cert-manager.io/cluster-issuer: letsencrypt-staging
+    cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     enabled: true
     secretName: gateway-tls

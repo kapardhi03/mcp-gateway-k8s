@@ -13,9 +13,8 @@
 # first certificate. Verified before writing this, not assumed.
 # Source: https://letsencrypt.org/docs/challenge-types/
 #
-# NOT YET APPLIED OR VERIFIED. The valuesContent schema belongs to the
-# Traefik chart that this k3s ships, so confirm the key path against the
-# running Traefik before relying on it:
+# Verified applied on 2026-10-22. If you change this, check the key path
+# against the chart this k3s ships, not upstream docs:
 #   kubectl -n kube-system get helmchart traefik -o yaml
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -26,8 +25,17 @@ spec:
   valuesContent: |-
     ports:
       web:
-        redirections:
-          entryPoint:
-            to: websecure
-            scheme: https
-            permanent: true
+        # NOTE the `http:` level. The key is ports.web.http.redirections,
+        # not ports.web.redirections. The first attempt omitted it and the
+        # value was silently ignored: helm reported the upgrade as deployed
+        # at revision 2, the Deployment did not change, and the Traefik pod
+        # never restarted. Nothing anywhere said the key was unknown.
+        # Confirmed against the chart this k3s actually ships
+        # (traefik-39.0.701+up39.0.7), values.yaml line 861 and
+        # templates/_podtemplate.tpl, rather than against upstream docs.
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true

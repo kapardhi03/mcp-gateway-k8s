@@ -12,7 +12,7 @@ ingress:
     # cert-manager watches this annotation and issues into ingress.tls.secretName.
     # STAGING first. Switch to letsencrypt-prod only once a staging certificate
     # has issued end to end, so a misconfiguration never burns a prod slot.
-    cert-manager.io/cluster-issuer: letsencrypt-staging
+    cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     enabled: true
     secretName: store-tls

@@ -24,7 +24,17 @@ set -euo pipefail
 
 NAMESPACE="${1:-store}"
 GW_SECRET="gateway-secrets"
-DEPLOY_LABEL="app.kubernetes.io/component=gateway"
+# Select on the label the chart puts on the DEPLOYMENT, not the one it puts
+# only on the pod template. The first run of this script, against the VPS on
+# 2026-10-22, failed with "no gateway deployment found": it looked for
+# app.kubernetes.io/component=gateway, which the chart sets on the pod
+# template so pods carry it, while the Deployment's own metadata.labels has
+# name/instance/managed-by/chart and no component. The selector could never
+# have matched, on any cluster.
+#
+# It failed closed, which is the one good thing about it: the Secret was not
+# touched and both key fingerprints were unchanged afterwards.
+DEPLOY_LABEL="app.kubernetes.io/name=gateway"
 
 node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 if [ -z "$node" ]; then
@@ -39,11 +49,20 @@ if ! kubectl -n "$NAMESPACE" get secret "$GW_SECRET" >/dev/null 2>&1; then
   exit 1
 fi
 
-deploy="$(kubectl -n "$NAMESPACE" get deploy -l "$DEPLOY_LABEL" -o name 2>/dev/null | head -1)"
-if [ -z "$deploy" ]; then
-  echo "FAIL  no gateway deployment found in $NAMESPACE" >&2
+matches="$(kubectl -n "$NAMESPACE" get deploy -l "$DEPLOY_LABEL" -o name 2>/dev/null)"
+count="$(printf '%s' "$matches" | grep -c . || true)"
+if [ "$count" -eq 0 ]; then
+  echo "FAIL  no deployment matching $DEPLOY_LABEL in $NAMESPACE" >&2
   exit 1
 fi
+if [ "$count" -gt 1 ]; then
+  # Rotating the wrong one would break a different gateway and leave this one
+  # on a key the operator thinks is dead. Refuse rather than guess.
+  echo "FAIL  $count deployments match $DEPLOY_LABEL in $NAMESPACE, refusing to guess:" >&2
+  printf '%s\n' "$matches" | sed 's/^/        /' >&2
+  exit 1
+fi
+deploy="$matches"
 echo "deploy   : $deploy"
 
 # D-013 option A: gw_<8 hex>_<secret>. Only the SHA-256 is ever stored.
