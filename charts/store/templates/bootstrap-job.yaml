@@ -63,6 +63,8 @@ spec:
               # fine until there was a prod certificate; with an https Ingress
               # and an http home URL, WordPress redirect-loops. See VDOD-6.
               value: "{{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}"
+            - name: STORE_COMING_SOON
+              value: {{ ternary "yes" "no" .Values.wordpress.comingSoon | quote }}
             - name: SITE_TITLE
               value: {{ .Values.wordpress.siteTitle | quote }}
             - name: SITE_TIMEZONE
@@ -188,6 +190,26 @@ spec:
                     '{"enabled":"yes","title":"Cash on delivery","description":"Pay with cash upon delivery.","instructions":"Pay with cash upon delivery.","enable_for_methods":[],"enable_for_virtual":"yes"}' \
                     --format=json ;;
               esac
+
+              # --- store visibility (guarded) ---
+              # WooCommerce ships "Coming soon" mode ON for a fresh install,
+              # with store_pages_only=yes, so shop, cart, checkout and product
+              # pages render "Our store is in the works and will be launching
+              # soon!" to the public. Users with manage_woocommerce are exempt,
+              # which is exactly why it went unnoticed: every manual check had
+              # been done while signed in to wp-admin, and the REST API is not
+              # affected at all, so woo-mcp always saw the real catalogue.
+              #
+              # Anyone following the README as an anonymous visitor would have
+              # seen a placeholder instead of a store. Found on the VPS on
+              # 2026-10-23 and present on local too.
+              COMING_SOON_NOW="$($WP option get woocommerce_coming_soon 2>/dev/null || true)"
+              if [ "$COMING_SOON_NOW" = "$STORE_COMING_SOON" ]; then
+                echo "SKIP  coming_soon already $STORE_COMING_SOON"
+              else
+                echo "RUN   set coming_soon to $STORE_COMING_SOON (was: ${COMING_SOON_NOW:-unset})"
+                $WP option update woocommerce_coming_soon "$STORE_COMING_SOON"
+              fi
 
               # --- site URL (guarded) ---
               # `core install` above sets these, but it is SKIPPED on an

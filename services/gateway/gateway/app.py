@@ -386,11 +386,16 @@ def build_app() -> FastAPI:
     _static = os.path.join(os.path.dirname(__file__), "static")
     api.mount("/static", StaticFiles(directory=_static), name="static")
 
-    @api.get("/")
+    # GET and HEAD, not GET alone. The MCP app is mounted at "/" behind the
+    # auth middleware, and FastAPI matches by method as well as path, so a
+    # route registered for GET only lets HEAD fall through to that mount and
+    # answer 401. `curl -I https://gateway.../` then reports 401 on a
+    # dashboard that serves 200 to a browser, which reads as broken.
+    @api.api_route("/", methods=["GET", "HEAD"])
     async def index() -> FileResponse:
         return FileResponse(os.path.join(_static, "index.html"))
 
-    @api.get("/accept")
+    @api.api_route("/accept", methods=["GET", "HEAD"])
     async def accept_page() -> FileResponse:
         # Same shell; the page reads ?token= itself. The token is never
         # sent to the server by this GET, only by the POST that uses it.

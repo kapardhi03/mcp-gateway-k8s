@@ -379,3 +379,65 @@ because an order payload carries its own.
 needs an order placed between 00:00 and 05:30 IST for the timezone to mean anything. Then the
 VPS: rotate the bootstrap key, deploy the gateway, and build D-022 and D-023 once the DuckDNS name
 and the PAT exist.
+
+## 2026-10-23: TLS on the VPS, and three things that reported success while doing nothing
+
+**Decided by Kapardhi.** The ACME contact address is never written into a committed file; it is
+substituted into the ClusterIssuer manifest on its way to `kubectl`. The file still holds
+`ACME_EMAIL_PLACEHOLDER` and `git grep` for the address returns 0 hits, tracked and untracked.
+
+**Done.** cert-manager v1.21.2 pinned from the OCI registry, both Let's Encrypt ClusterIssuers,
+staging certificates first and then production, http redirecting to https, the WordPress URL move
+to the DuckDNS host, woo-mcp redeployed with the corrected signing URL, the gateway and fx-mcp
+deployed for the first time, and the bootstrap key rotated before anything was publicly reachable.
+VDOD-1 to VDOD-13 all pass with evidence in the trace.
+
+**The prediction that mattered was right.** VDOD-7 was written before any of it existed, from
+WooCommerce's own verifier rather than from memory: the base string is built with
+`get_home_url(null, $request_path, is_ssl() ? 'https' : 'http')`, so the host follows the stored
+home URL while the scheme follows `is_ssl()`, which is false for in-cluster plain-HTTP calls. The
+prediction was that `store.homeUrl` must become `http://store.kapardhi-gw.duckdns.org`: new host,
+old scheme. Run from a probe pod before woo-mcp was redeployed, so the then-deployed value was a
+control, the three variants returned 200, 401 and 401. One of three passes, so the check
+discriminates rather than merely going green.
+
+**AI errors caught, all three the same shape: a success report with no effect behind it.**
+
+- **`rotate-gateway-key.sh` could never have worked, on any cluster.** Its first ever execution
+  printed `FAIL no gateway deployment found`. It selected Deployments by
+  `app.kubernetes.io/component=gateway`, which the chart sets on the **pod template** so pods
+  carry it, while the Deployment's own labels have name, instance, managed-by and chart. The
+  selector matched nothing, and would have matched nothing locally either. It failed closed:
+  hashing both keys before and after showed the Secret untouched. This is the second script here
+  whose bug appeared only on first real execution, after `dev-secrets.sh`'s SIGPIPE. Writing a
+  script is not evidence that it runs.
+- **The Traefik redirect applied, reported success, and changed nothing.** The helm-install Job
+  picked up the values file and reported `Release "traefik" has been upgraded`, revision 2,
+  `STATUS: deployed`. The Deployment did not change and the pod stayed up for six days. The key
+  needed one more level: `ports.web.http.redirections.entryPoint`, not
+  `ports.web.redirections.entryPoint`. Found by extracting the chart this k3s actually ships and
+  reading its `values.yaml` and `_podtemplate.tpl`, rather than trusting upstream Traefik docs.
+  **Helm merges unknown values silently**, so a wrong path is indistinguishable from a correct one
+  in every log line. The only check that works is the rendered `args` or the live behaviour.
+- **The storefront was not a storefront.** Asked to confirm the VPS store could take an order, the
+  first query said 0 purchasable products while the REST API happily returned one. The shop page
+  was 80 KB of WooCommerce markup containing no product and no "no products found" message either.
+  WooCommerce ships **Coming soon mode ON** for a fresh install, with `store_pages_only`, so shop,
+  cart, checkout and product pages render "Our store is in the works and will be launching soon!"
+  to the public. Users with `manage_woocommerce` are exempt, and the REST API is not affected at
+  all, which is exactly why nothing had noticed: every manual check had been done while signed in
+  to wp-admin, and woo-mcp always saw the real catalogue.
+
+  **It was true on the local cluster too.** So DOD-01's recorded pass is weaker than it reads: the
+  browser checkout worked because Kapardhi was a logged-in admin. Anyone following the README as
+  an anonymous visitor would have seen a placeholder. Fixed with a guarded step in the bootstrap
+  Job so it is declarative in both environments, and the VPS shop now shows Demo Widget at 19.99
+  with an add-to-cart button to an anonymous visitor.
+
+**Smaller things.** `HEAD /` returned 401 while `GET /` returned 200, because the route registered
+GET only and HEAD fell through to the MCP mount; `curl -I` is the first thing a reviewer types, so
+the route now accepts both. A probe account was created to prove the `Secure` cookie flag and
+deleted immediately afterwards; no A or B account exists on the VPS.
+
+**Next.** The LLM key on the VPS is Kapardhi's to type. Then the VPS sitting as users A and B, the
+third upstream (D-023), and the recording.

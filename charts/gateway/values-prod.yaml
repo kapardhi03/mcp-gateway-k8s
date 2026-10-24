@@ -24,4 +24,4 @@ imagePullSecrets:
 # Pinned, multi-arch (linux/amd64 + linux/arm64), private on GHCR.
 # Dashboard, chat agent and FORWARDED_ALLOW_IPS. Pushed 2026-10-22.
 image:
-  tag: "0.4.4"
+  tag: "0.4.5"

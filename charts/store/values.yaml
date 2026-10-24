@@ -136,6 +136,11 @@ wordpress:
   # no TLS at all. See D-022 and VDOD-6.
   trustForwardedProto: false
 
+  # WooCommerce's "Coming soon" mode, which a fresh install turns ON. Left
+  # off here: a store that shows "launching soon" to every visitor who is not
+  # a signed-in admin is not a demo of anything.
+  comingSoon: false
+
 # WooCommerce REST API credentials for the Woo MCP server. See D-006, D-019.
 #
 # The pair is generated OUTSIDE the cluster by scripts/dev-secrets.sh and put

@@ -76,6 +76,10 @@ Sections follow the required demo video sections.
 | 6.3 | How do you upgrade and roll back with Helm? | | | todo |
 | 6.4 | Why is a DuckDNS hostname a safer base for Let's Encrypt than sslip.io, and how did you establish that? | | | todo |
 | 6.5 | Without TLS, which security property do you lose, and where is that written down? | | | todo |
+| 6.6 | Your rotation script had never been run until the night you needed it. What else in this repo is in that category? | | | todo |
+| 6.7 | Helm said the Traefik upgrade was deployed and nothing changed. How would you catch that class of failure in future? | | | todo |
+| 6.8 | woo-mcp signs `http://` against a site whose home URL is `https://`. Explain why that is correct and not a bug. | | | todo |
+| 6.9 | Why is the ACME email not in the repo, and how is it supplied instead? | | | todo |
 
 ## 7. Testing and evidence
 
@@ -85,3 +89,5 @@ Sections follow the required demo video sections.
 | 7.2 | You have twice shipped a bug that a green check could not distinguish from correct behaviour. What do those two have in common? | | | todo |
 | 7.3 | What does "proved by mutation" mean here, and which tests have been proved that way? | | | todo |
 | 7.4 | Which of your passing rows are evidence of the thing they claim, and which are only evidence that nothing crashed? | | | todo |
+| 7.5 | DOD-01 passed while the shop page showed "launching soon" to every visitor who was not an admin. How did a green row and a broken storefront coexist, and what does that say about checks run while signed in? | | | todo |
+| 7.6 | VDOD-7 was predicted before it was run and the prediction held. What would you have done if only one of the three variants had failed instead of two? | | | todo |

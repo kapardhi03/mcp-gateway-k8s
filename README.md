@@ -155,10 +155,26 @@ cannot serve tools leaves the Service.
 
 ### Dashboard and chat agent
 
-Not built yet. The dashboard is a React app for logging in, managing upstreams,
-generating and revoking keys, and reading the audit log. The chat agent runs in
-the dashboard, calls tools only through the gateway, and is audited as the
-logged-in user. See the status section below.
+The dashboard is React 18 with htm, served by the gateway itself. There is no
+build step and no `node_modules`: React is vendored into the image at build
+time, so it works on a cluster with no internet access. Five tabs: Servers,
+Members, My API keys, Audit log and Chat.
+
+The chat agent runs **server side**. The browser sends a sentence to `POST /chat`
+and gets back an answer plus the list of tools that were called. It never sees
+the model API key, never sees an upstream URL, and never calls a tool itself.
+
+The agent reaches its tools through the gateway's **own** `/mcp`, with a
+short-lived key minted for the signed-in user and deleted when the turn ends. So
+it is just another MCP client, the same as Claude Code: there is no second
+privileged path that could behave differently from the one the demo shows, and
+the audit row names the user because that is who actually made the call.
+
+Model is Claude Haiku 5.5. Measured cost is about $0.0005 a question. Credit
+guards are all Helm values: six tool steps, 1024 max tokens per call, 200 turns
+a day across all users, and caps on question and tool-result length. The key is
+optional, so a gateway installed without it still starts and serves everything
+else, with the Chat tab saying it is switched off. See D-011.
 
 ## How a tool call travels
 
@@ -262,19 +278,56 @@ kubectl -n store get secret store-admin -o jsonpath='{.data.password}' | base64 
 
 ## Running it on a k3s VPS
 
-Same charts, same templates. The only differences are in the values files: the
-Ingress hosts, the resource blocks, and an `imagePullSecret`, because prod pulls
-the multi-arch image from a registry instead of importing it.
+Same charts, same templates. The differences live in the values files: the
+Ingress hosts, TLS, the resource blocks, and an `imagePullSecret`, because prod
+pulls multi-arch images from a registry instead of importing them.
+
+Live at `https://store.kapardhi-gw.duckdns.org` and
+`https://gateway.kapardhi-gw.duckdns.org`.
+
+TLS first, once per cluster. See `deploy/vps/README.md` for the full runbook and
+D-022 for why the hostname is DuckDNS and not sslip.io.
+
+```bash
+helm install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+  --version v1.21.2 --namespace cert-manager --create-namespace \
+  --set crds.enabled=true
+kubectl apply -f deploy/vps/clusterissuers.yaml      # set the ACME email first
+kubectl apply -f deploy/vps/traefik-redirect.yaml    # http to https
+```
+
+Then the applications:
 
 ```bash
 scripts/dev-secrets.sh store --ghcr
+scripts/dev-secrets.sh store --llm          # optional, for the chat agent
 helm install store charts/store -n store -f charts/store/values-prod.yaml
 helm install woo charts/woo-mcp -n store -f charts/woo-mcp/values-prod.yaml
 helm install fx  charts/fx-mcp  -n store -f charts/fx-mcp/values-prod.yaml
 helm install gw  charts/gateway -n store -f charts/gateway/values-prod.yaml
 ```
 
+Rotate the bootstrap key before the gateway is publicly reachable:
+
+```bash
+scripts/rotate-gateway-key.sh store
+```
+
+Create the first admin, which prints a single-use invite link. There is no
+default password anywhere, on purpose:
+
+```bash
+kubectl -n store exec deploy/gw-gateway -- \
+  python -m gateway.adminctl invite you@example.com admin
+```
+
 Prod Secrets are generated on the host. No value is ever copied from local.
+
+Two prod values are easy to get wrong and both have a comment in the values file
+saying why. `woo-mcp`'s `store.homeUrl` keeps the **http** scheme even though the
+site is https, because WooCommerce signs OAuth with `is_ssl()`, which is false
+for in-cluster calls. And the gateway needs `forwardedAllowIps`, or the session
+cookie's `Secure` flag can never turn on behind a TLS-terminating proxy.
 
 ## Checks
 
@@ -306,15 +359,26 @@ Verified, with the evidence recorded in `docs/requirements-trace.md`:
 - woo-mcp, local and on the VPS. All five tools, NetworkPolicy isolation proved
   from both a gateway-labelled pod and an unlabelled one, no route from outside,
   and a store outage surfacing as a clear tool error instead of a hang or a crash.
-- Gateway, local. Tool fan-out, both protocol versions on one endpoint, routing, a
-  dead upstream not breaking the list, disabling an upstream removing its tools,
-  audit rows for successes and rejections, bad keys rejected, and a credential
-  canary that appears in zero captured responses and zero pod logs.
+- Gateway, local and on the VPS. Tool fan-out, both protocol versions on one
+  endpoint, routing, a dead upstream not breaking the list, disabling an upstream
+  removing its tools, audit rows for successes and rejections, bad keys rejected,
+  and a credential canary that appears in zero captured responses and zero pod
+  logs.
 - One natural-language question answered from two different upstreams in one
   turn, through the single gateway endpoint.
+- Team features: invites, argon2 passwords, server-side sessions, roles, per-user
+  keys, and eight security checks covering password storage, cookie flags, CSRF,
+  role enforcement, key isolation, invite single-use, and two credential-leak
+  greps.
+- Dashboard and chat agent, driven in a real browser rather than checked with
+  curl. That mattered: the dashboard passed every HTTP check while rendering a
+  completely blank page.
+- TLS on the VPS. Production Let's Encrypt certificates on both hosts, http
+  redirecting to https, and the session cookie carrying `Secure`, which is the
+  one assertion local can never make.
 
-Not built yet: the dashboard, the chat agent, named users beyond the bootstrap
-admin, and the invite flow. The gateway has not been deployed to the VPS yet.
+Still to do: the full Definition-of-Done run as two separate users in a browser,
+a third upstream (D-023), and the demo recording.
 
 ## How decisions are recorded
 

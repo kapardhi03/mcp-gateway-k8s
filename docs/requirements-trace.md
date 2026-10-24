@@ -15,7 +15,7 @@ died on `wp option update gmt_offset`.
 
 | ID | Check | Expected (write before running) | Actual | Evidence | Status |
 |---|---|---|---|---|---|
-| DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | Kapardhi checked out in a browser at http://store.localhost/ on 2026-10-16 | Order 12 created, payment method `cod` (Cash on delivery), total 19.99 USD, line item `Demo Widget` x1 sku `DEMO-WIDGET-1` | `wc_get_orders()` via `kubectl exec` on the WordPress pod | pass |
+| DOD-01 | Storefront: add product to cart, checkout with COD or dummy gateway | Kapardhi checked out in a browser at http://store.localhost/ on 2026-10-16 | Order 12 created, payment method `cod` (Cash on delivery), total 19.99 USD, line item `Demo Widget` x1 sku `DEMO-WIDGET-1` | `wc_get_orders()` via `kubectl exec` on the WordPress pod | pass, with a correction: see below |
 | DOD-02 | Order from DOD-01 visible in WooCommerce admin | WooCommerce 11.2.1 admin | Order 12 status `processing`, created 2026-10-16T15:37:15Z. Admin URL `http://store.localhost/wp-admin/admin.php?page=wc-orders&action=edit&id=12`. Orders list route returns 302 to `wp-login.php` when unauthenticated, which confirms the route exists and is protected. Orders use WooCommerce legacy post storage, not HPOS; `wc_get_orders()` is storage-agnostic and was used for this check. | WP-CLI-equivalent PHP via `kubectl exec`, output in `docs/build-log.md` | pass |
 | DOD-03 | User A, chat agent: create product with name and price, it appears on storefront | Pre-registered 2026-10-18. User A, signed in to the dashboard in a browser, types one sentence asking for a product with a given name and price. The chat agent calls `woo__create_product` **through the gateway**, shows which tool it called, and the product is then reachable on the storefront at its permalink with that name and price. The browser never calls a tool directly. | 2026-10-22, Kapardhi in a browser. Two audit rows, `a@example.com` / `woo` / `create_product` / `ok` at 21:58:48 and 23:17:18 UTC, each inside a `chat`/`turn` row, so the call went through the gateway and not from the page. Products #15 and #16 "Gateway Mug" exist at 12.50, both `is_purchasable=yes` and `is_in_stock=yes`, so they are live on the storefront. Asked for once, run twice: **the duplicate should be trashed before the demo.** | pass |
 | DOD-04 | User A: place order by hand, ask agent "what orders came in today", it returns that order | Pre-registered 2026-10-18. An order placed in the storefront today, then User A asks the agent in plain English. The agent calls `woo__list_orders` with the date resolved in the **store's** timezone (Asia/Kolkata) and returns that order. An order from a previous day is not returned. | **Split in two, Kapardhi's decision 2026-10-22, and the split is recorded rather than quietly made.** The live check is the plain version: order placed, agent asked, agent returns it. That is the requirement as written and it is what the demo shows. It does **not** prove the timezone, because an order placed in daylight falls inside both the Asia/Kolkata and a UTC window, so the two implementations give identical answers. Proving the timezone live needs an order placed between 00:00 and 05:30 IST and a question asked after 05:30 IST the same day, which is a demo nobody can schedule. **The timezone edge is covered by unit test instead**, in `services/woo-mcp/tests/test_store_settings.py`. Live half still `todo`: no order has been placed yet. | todo |
@@ -26,6 +26,20 @@ died on `wp option update gmt_offset`.
 | DOD-09 | Disable one upstream, its tools disappear from chat agent and external client | Pre-registered 2026-10-18. An admin disables fx in the dashboard. Its tools vanish from both the external client's `tools/list` and the chat agent's tool set, within the refresh window. The fx pod keeps running: this is a registry flag, not a scaling action. Re-enabling restores them. | | | todo |
 | DOD-10 | Kill one upstream pod, others keep working, dashboard shows it Unreachable | Pre-registered 2026-10-18. `kubectl delete pod` on woo-mcp. `tools/list` still returns the fx tools within the per-upstream timeout, the chat agent still answers an fx question, and the dashboard's Servers page shows woo as `Unreachable` with a reason. Recovery is automatic once the pod is back. | 2026-10-22. **The pre-registered method did not produce the evidence and was replaced.** `kubectl delete pod` was run by Kapardhi; the replacement pod was `Running` in under 4 seconds, so the gateway never observed a degraded state and there was nothing to see. A `kubectl delete pod` on a single-replica Deployment is not a sustained outage. Redone by scaling the Deployment to 0, which holds the failure open: Endpoints emptied, then `woo Unreachable err=ConnectError tools=0` while `fx Connected tools=2` throughout. An external `tools/list` returned exactly the 2 fx tools. The chat agent answered "What is 100 US dollars in Japanese yen?" from `fx__convert` during the outage, and asked "How many products are in the store?" it answered "My tools only cover currency exchange rates and conversions" and called nothing, rather than inventing a figure. Scaled back to 1 with no other action: woo returned to `Connected`, 5 tools, 7 in `tools/list`. See the note below on dashboard lag. | pass |
 | DOD-11 | Every call above in audit log, attributed to the right user | Pre-registered 2026-10-18. Every call made in DOD-03 to DOD-10 has an audit row carrying user, server, tool, timestamp, duration_ms and outcome, visible on the dashboard's Audit page. A's calls say A, B's say B. Chat turns additionally carry input and output token counts. Failures and rejections appear with failure outcomes, not silently. | | | todo |
+
+**Correction to DOD-01, found 2026-10-23.** The browser checkout worked, and the order exists.
+But WooCommerce ships **Coming soon mode ON** for a fresh install with `store_pages_only=yes`, so
+the shop, cart, checkout and product pages render "Our store is in the works and will be launching
+soon!" to anyone without `manage_woocommerce`. Kapardhi was signed in to wp-admin when he ran
+DOD-01, so he was exempt and saw the real store. An anonymous visitor would not have. This was
+true on **both** clusters, and the REST API is unaffected, which is why woo-mcp always saw the
+real catalogue and nothing flagged it.
+
+The order and the evidence behind DOD-01 stand. What does not stand is the implied claim that a
+reviewer following the README would see the same thing. Fixed with a guarded step in the bootstrap
+Job that sets `woocommerce_coming_soon` from a chart value, so both environments are declarative.
+Verified afterwards on the VPS as an anonymous visitor over https: the shop page returns Demo
+Widget at 19.99 with an add-to-cart button, and the coming-soon banner is gone.
 
 ## Security checks (SEC)
 
@@ -575,8 +589,8 @@ He will do the VPS sitting tomorrow with fresh passwords, which is also S-11.
 | S-03 | README: place an order, connect external client, use chat agent | | todo |
 | S-04 | Source: dashboard, gateway, Woo MCP server, chat agent | | todo |
 | S-05 | Helm charts + values-local + values-prod | | todo |
-| S-06 | System design and tradeoffs note | `docs/design-and-tradeoffs.md` | todo |
-| S-07 | Threat model note (4 required topics) | `docs/threat-model.md` | todo |
+| S-06 | System design and tradeoffs note | `docs/design-and-tradeoffs.md` | draft, Kapardhi to edit for voice |
+| S-07 | Threat model note (4 required topics) | `docs/threat-model.md` | draft. **The four required topic names are not recorded anywhere in this repo**, only the count. The draft covers credential handling, auth and multi-user isolation, network exposure, transport security, CSRF, the chat agent and prompt injection. Kapardhi to confirm the headings against the requirements document. |
 | S-08 | List of stretch goals attempted | | todo |
 | S-09 | Demo video covering all 6 required sections | | todo |
 | S-10 | Released: repo public, demo video posted | | todo |
