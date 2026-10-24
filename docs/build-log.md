@@ -439,5 +439,30 @@ GET only and HEAD fell through to the MCP mount; `curl -I` is the first thing a 
 the route now accepts both. A probe account was created to prove the `Secure` cookie flag and
 deleted immediately afterwards; no A or B account exists on the VPS.
 
-**Next.** The LLM key on the VPS is Kapardhi's to type. Then the VPS sitting as users A and B, the
+**A leaked key, caused by Claude, on 2026-10-24.** Kapardhi typed the Anthropic key into
+`dev-secrets.sh --llm` on the VPS. The script printed `WARN key does not start with sk-ant-,
+continuing anyway` and stored it. The warning was correct and the cause was not a wrong key: the
+pasted value had a **leading space**, which is invisible at a `read -s` prompt.
+
+Claude then wrote a throwaway probe pod to verify the key with one API call, and that probe
+printed the raw exception. httpx rejected the header and quoted the offending value, so the whole
+key went into the transcript as `Illegal header value b' sk-ant-usr-...'`.
+
+**This is the exact failure mode the project already had a rule for, and the rule was only applied
+to shipped code.** `upstreams.py` reports exception TYPES and never their text, with a comment
+saying a transport error can quote the request including its headers. `llm.py` does the same for
+the model API. Both were correct and both held. The ad-hoc diagnostic did not follow the rule
+because nobody had written the rule down for diagnostics.
+
+Containment: the Secret was deleted within a minute; the running gateway had started before the
+Secret existed and logged `'llm_api_key': '<unset>'`, so it never held the value; `sk-ant-` appears
+0 times in all seven pod logs and nowhere in the repo except the prefix pattern in the script. The
+key is in the chat transcript, so it is compromised and has to be revoked at the Anthropic console.
+No cluster artefact needs cleaning.
+
+`dev-secrets.sh` now strips whitespace from the key before anything else, and **refuses** instead of
+warning when the prefix is wrong, because continuing on a malformed key stores something that
+cannot work and defers the failure to a confusing place.
+
+**Next.** The LLM key on the VPS is Kapardhi's to type, with a freshly issued key. Then the VPS sitting as users A and B, the
 third upstream (D-023), and the recording.

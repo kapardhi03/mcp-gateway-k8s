@@ -142,9 +142,27 @@ if [ "$WITH_LLM" -eq 1 ]; then
       echo "FAIL  no key entered" >&2
       exit 1
     fi
+    # Strip surrounding whitespace before anything else. A paste very often
+    # carries a leading space or a trailing newline, and neither is visible
+    # at a `read -s` prompt. On 2026-10-24 a leading space went into the
+    # Secret unnoticed: the prefix warning below fired and was read as "wrong
+    # key" rather than "whitespace", and the value only failed much later,
+    # inside httpx, as `Illegal header value` with the key quoted in the
+    # exception text.
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    if [ -z "$key" ]; then
+      echo "FAIL  key was only whitespace" >&2
+      exit 1
+    fi
+    # Refuse rather than warn. Continuing on a malformed key stores something
+    # that cannot work and defers the failure to a confusing place.
     case "$key" in
       sk-ant-*) : ;;
-      *) echo "WARN  key does not start with sk-ant-, continuing anyway" >&2 ;;
+      *)
+        echo "FAIL  key does not look like an Anthropic key (expected sk-ant-...)." >&2
+        echo "      Nothing was stored. Check for a truncated or mistyped paste." >&2
+        exit 1
+        ;;
     esac
     kubectl -n "$NAMESPACE" create secret generic "$LLM_SECRET" \
       --from-literal=anthropic-api-key="$key"
