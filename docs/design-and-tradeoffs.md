@@ -48,21 +48,42 @@ same name was skipped forever, so the gateway served a stale schema after woo-mc
 It is now keyed on name plus a sorted-JSON fingerprint of the schema, so a changed schema forces a
 rebuilt function.
 
-## One fan-out, per-upstream timeouts (D-010)
+## Tool aggregation, routing and failure handling (D-009, D-010)
 
-`tools/list` queries every enabled upstream concurrently, each with its own timeout. One dead
-upstream contributes no tools, is marked `Unreachable`, and costs the timeout once rather than
-N times.
+The three together, because they are one mechanism seen from three angles.
 
-The alternative, serial queries with a global timeout, means one slow upstream can starve the
-others and the client sees a partial list with no explanation.
+**Aggregation.** On refresh the gateway asks every *enabled* upstream for its tool list,
+concurrently. Each tool is republished as `slug__tool`, so `list_products` from woo becomes
+`woo__list_products`. A client sees one flat list of seven tools and one endpoint.
 
-Verified by scaling woo-mcp to zero: the list still returned the fx tools in under a second
-against an eight second budget, on both clusters.
+Refresh runs on a 30 second background loop and also before any MCP request whose cached list is
+older than three seconds. That second trigger is what makes a killed upstream disappear and a
+registry change take effect promptly, instead of waiting for the slow loop.
+
+**Routing.** The prefix is the routing key. `proxy.split()` turns `woo__list_orders` back into
+`("woo", "list_orders")`, the registry gives the upstream row for that slug, and the call goes
+there and nowhere else. A call for a slug that is not registered, or for one that is disabled,
+fails before any network call.
+
+**Failure handling, and what each failure looks like.**
+
+| Failure | What the client sees |
+|---|---|
+| One upstream dead | Its tools are absent. The others are returned. Status reads `Unreachable` with a reason. |
+| One upstream slow | Its own timeout, 8s by default, then as above. The fan-out is concurrent, so one slow upstream costs 8s total, not 8s each. |
+| Tool raises upstream | A `ToolError` carrying the upstream's message, so the model can act on it. |
+| Transport error | A `ToolError` naming the exception type, never its text, because the text can quote request headers. |
+| Upstream disabled by an admin | Tools vanish from `tools/list` within the refresh window. The pod keeps running; this is a registry flag, not a scaling action. |
+
+The alternative, serial queries under one global timeout, means a single slow upstream starves the
+others and the client gets a short list with no explanation.
+
+Verified by scaling woo-mcp to zero on both clusters: the list still returned the fx tools in
+under a second against an eight second budget, and woo read `Unreachable` with `ConnectError`.
 
 **Use `scale --replicas=0`, not `delete pod`, to demonstrate this.** A pod delete self-heals in
-about four seconds, which is faster than the health loop and faster than the registry cache, so
-nothing visible happens. That is a point in Kubernetes' favour and a bad demo.
+about four seconds, faster than the health loop and faster than the registry cache, so nothing
+visible happens. That is a point in Kubernetes' favour and a bad demo.
 
 ## Postgres for the gateway, separate from the store's MariaDB (D-008)
 
@@ -143,6 +164,37 @@ wildcard-IP service is on it: sslip.io, nip.io, traefik.me, localtest.me, lvh.me
 
 The move cost one values change per chart, because the hostname was already a per-environment
 value.
+
+## What changes for production
+
+Everything below is a values difference. No template changes, which is what
+`scripts/check-charts.sh` exists to keep true.
+
+| | Local (k3d) | VPS (k3s) |
+|---|---|---|
+| **DNS** | `*.localhost`, resolved by the browser, nothing configured | `store.kapardhi-gw.duckdns.org` and `gateway.kapardhi-gw.duckdns.org`, both A records to the static IP. DuckDNS because it is on the Public Suffix List and so gets its own Let's Encrypt rate-limit bucket (D-022). |
+| **Ingress** | `className: traefik`, plain HTTP, no TLS block | Same class, plus `ingress.tls.enabled` and a `cert-manager.io/cluster-issuer` annotation. Certificates from Let's Encrypt over HTTP-01. A cluster-level Traefik config redirects HTTP to HTTPS. |
+| **Storage class** | `local-path`, k3d's default, backed by a directory in the node container. Lost if the cluster is deleted. | `local-path` again, but on the VPS it is a real directory on a 50 GB persistent disk. Same class name, very different durability. Neither template names it; both come from values. |
+| **Secrets** | `scripts/dev-secrets.sh` generates random values into Kubernetes Secrets. No GHCR pull secret needed, because k3d imports images directly. | The same script run **on the VPS context**, generating fresh values there. No value is ever copied from local. Adds the GHCR imagePullSecret, because prod pulls multi-arch images from a private registry. The LLM key is typed by hand at a `read -s` prompt and never written to a file. |
+| **Images** | Built locally and imported with `k3d image import` | Pulled from GHCR, multi-arch, pinned tags in `values-prod.yaml` so a rollback does not depend on remembering a `--set` |
+| **Proxy headers** | Not set. Nothing in front of the pod. | `forwardedAllowIps: "*"`, or the session cookie's `Secure` flag can never turn on behind a TLS-terminating proxy. |
+| **WordPress** | `home` and `siteurl` are `http://store.localhost` | `https://store.kapardhi-gw.duckdns.org`, plus `trustForwardedProto` so WordPress believes the proxy instead of redirect-looping. |
+
+**Two prod values are easy to get wrong, and both have a comment in the values file saying why.**
+
+`woo-mcp`'s `store.homeUrl` keeps the **http** scheme even though the site is https. WooCommerce
+builds its OAuth base string with `get_home_url(null, $path, is_ssl() ? 'https' : 'http')`, so the
+host follows the stored home URL while the scheme follows `is_ssl()`, which is false for
+in-cluster plain-HTTP calls. New host, old scheme. Setting it to https gives a 401 that looks
+exactly like a wrong credential.
+
+And `forwardedAllowIps`, above. uvicorn parses forwarded headers only for listed clients and
+defaults to 127.0.0.1, which the ingress controller is not.
+
+**Upgrade and rollback.** `helm upgrade` with the prod values file; `helm rollback <release> <n>`
+to go back. The store's bootstrap Job is a `post-upgrade` hook with
+`hook-delete-policy: before-hook-creation`, so it re-runs on every upgrade and every step inside
+it is guarded, which is what makes re-running safe.
 
 ## What is deliberately not here
 

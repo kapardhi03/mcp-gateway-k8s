@@ -329,6 +329,87 @@ site is https, because WooCommerce signs OAuth with `is_ssl()`, which is false
 for in-cluster calls. And the gateway needs `forwardedAllowIps`, or the session
 cookie's `Secure` flag can never turn on behind a TLS-terminating proxy.
 
+## Using it
+
+These are the three things a reviewer will want to do. Hosts below are the local ones; on the VPS
+substitute `https://store.kapardhi-gw.duckdns.org` and `https://gateway.kapardhi-gw.duckdns.org`.
+
+### Place an order
+
+No login. The store takes guest checkout with Cash on Delivery, which is the only payment method
+enabled, so nothing external is called and no card details exist anywhere.
+
+1. Open `http://store.localhost/shop/`
+2. Add **Demo Widget** to the cart
+3. Checkout, fill the billing fields, choose **Cash on delivery**, place the order
+
+Confirm it landed, without the admin UI:
+
+```bash
+kubectl -n store exec deploy/store-store-wp -- php -r \
+  'require_once "/var/www/html/wp-load.php";
+   foreach (wc_get_orders(["limit"=>3]) as $o)
+     printf("#%d %s %s %s\n", $o->get_id(), $o->get_status(),
+            $o->get_total(), $o->get_date_created()->format("c"));'
+```
+
+### Connect an external MCP client
+
+The client needs **two things only**: the gateway URL and a key. No upstream URL and no upstream
+credential ever appear in a client config, which is the whole point.
+
+Get a key from the dashboard: sign in, **My API keys**, Create key. It is shown once.
+
+For Claude Code:
+
+```bash
+claude mcp add --transport http gw http://gateway.localhost/mcp \
+  --header "Authorization: Bearer gw_<prefix>_<secret>"
+```
+
+Then ask it to list tools. You should see seven: five `woo__*` and two `fx__*`. A question like
+"what's today's order total in euros?" makes it call `woo__list_orders` and `fx__convert` in one
+turn, across two different upstream servers, through one endpoint.
+
+The first admin comes from the CLI, because there is no default password anywhere:
+
+```bash
+kubectl -n store exec deploy/gw-gateway -- \
+  python -m gateway.adminctl invite you@example.com admin
+```
+
+That prints a single-use invite link. Open it, set a password, and you are the admin.
+
+### Use the chat agent
+
+Sign in to `http://gateway.localhost/` and open the **Chat** tab. Ask in plain English:
+
+- "What products are in the store?"
+- "What orders came in today?"
+- "What is 100 US dollars in Japanese yen?"
+
+Each answer shows the tools it called, with arguments, duration and outcome, and the token count
+for the turn. Every one of those calls appears in the **Audit log** tab under your name, because
+the agent authenticates to the gateway as you rather than as itself.
+
+If the Chat tab says it is switched off, there is no `llm-api` Secret. Everything else still
+works; create it with `scripts/dev-secrets.sh store --llm`.
+
+## Stand-out items attempted
+
+Beyond the core requirements, with where to look.
+
+| Item | Where |
+|---|---|
+| **Deployed on a real VPS with TLS.** k3s on a GCP VM, production Let's Encrypt certificates on both public hosts, HTTP redirecting to HTTPS. The hostname is DuckDNS rather than sslip.io for a measured reason: sslip.io is not on the Public Suffix List, so it shares one global Let's Encrypt rate-limit bucket with every other user. | `deploy/vps/`, `charts/*/values-prod.yaml`, D-022, VDOD-1 to VDOD-13 |
+| **NetworkPolicies.** woo-mcp and fx-mcp accept connections only from pods labelled as the gateway. Proved from both a labelled and an unlabelled pod. | `charts/woo-mcp/templates/networkpolicy.yaml`, WM-5 and WM-6 |
+| **Upstream credentials encrypted at rest.** Fernet, key from a Secret, decrypted only to build the outbound header, never returned by any endpoint and never logged. Proved with a canary grep across six endpoints and two pod logs. | `services/gateway/gateway/crypto.py`, `upstreams.py`, SEC-7 |
+| **Both MCP protocol versions on one endpoint.** Session-based and stateless clients work against the same URL. | D-001, the spike in `spikes/d001-mcp-version/` |
+| **Chat agent as a first-class MCP client.** It calls the gateway's own `/mcp` with a short-lived per-user key rather than shortcutting in-process, so there is no privileged path the demo does not exercise. | `services/gateway/gateway/chat.py`, D-011 |
+| **Audit log covering failures.** Rejected calls and failed logins get rows too, not just successes. | `db.py`, the Audit tab |
+| **Cost control on the LLM.** Step cap, token cap, global daily cap, question and tool-result length caps, all Helm values. Measured at about $0.0005 a question. | `charts/gateway/values.yaml`, D-011, CA-5 |
+| **Guard scripts that encode real bugs.** `check-cluster.sh` fails any Job with `status.failed > 0`, written after a Job reported `Complete` off a retry. `check-charts.sh` keeps cluster-specific values out of templates. | `scripts/`, and the last section of `docs/design-and-tradeoffs.md` |
+
 ## Checks
 
 ```bash
