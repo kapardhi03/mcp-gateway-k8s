@@ -22,3 +22,5 @@ __pycache__/
 
 # Local tooling
 .DS_Store
+
+video-script.md
